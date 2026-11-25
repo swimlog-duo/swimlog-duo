@@ -111,23 +111,23 @@ export const HomePage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Elite Sports Hero Banner */}
-      <section className="relative overflow-hidden rounded-3xl border border-[#16345b] bg-gradient-to-br from-[#0b1f3a] via-[#102d54] to-[#07111e] p-6 sm:p-8 text-white shadow-xl dark:border-slate-800">
-        <div className="absolute -right-12 -top-12 h-64 w-64 rounded-full bg-[#0077b6]/20 blur-3xl pointer-events-none" />
-        <div className="absolute -left-12 -bottom-12 h-64 w-64 rounded-full bg-[#38bdf8]/10 blur-3xl pointer-events-none" />
+      <section className="relative overflow-hidden rounded-3xl border border-[#1b3b68] bg-gradient-to-br from-[#0b1f3a] via-[#102d54] to-[#07111e] p-6 sm:p-8 text-white shadow-xl dark:border-slate-800">
+        <div className="absolute -right-16 -top-16 h-64 w-64 rounded-full bg-[#0077b6]/25 blur-3xl pointer-events-none" />
+        <div className="absolute -left-16 -bottom-16 h-64 w-64 rounded-full bg-[#38bdf8]/15 blur-3xl pointer-events-none" />
 
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
-          <div className="min-w-0 space-y-1.5">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-[#38bdf8] backdrop-blur-md">
+          <div className="min-w-0 space-y-2">
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3.5 py-1 text-xs font-bold text-[#38bdf8] backdrop-blur-md border border-white/10">
               <Zap className="h-3.5 w-3.5 fill-[#38bdf8]" />
               <span>{isCoach ? 'コーチダッシュボード' : '選手ダッシュボード'} · {session?.displayName || '表示名未設定'}</span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
-              {isCoach ? '練習メニュー管理と選手指導' : '今日のトレーニングと記録'}
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
+              {isCoach ? 'チームの練習メニュー管理と進捗指導' : '日々のトレーニングと自己ベスト更新'}
             </h1>
-            <p className="text-xs sm:text-sm text-slate-300 max-w-xl">
+            <p className="text-xs sm:text-sm text-slate-300 max-w-xl leading-relaxed">
               {isCoach
-                ? '作成したメニューの配信状況確認や、選手ごとのタイム・感想へのフィードバックを行えます。'
-                : 'コーチからの共有メニューを確認し、日々のトレーニング成果やラップタイムを記録しましょう。'}
+                ? '作成したメニューの配信状態管理や、選手ごとのタイム・感想に対するコーチングフィードバックを素早く行えます。'
+                : '共有されたトレーニングメニューを確認し、日々の泳距離やラップタイム、コンディションを正確に記録しましょう。'}
             </p>
           </div>
 

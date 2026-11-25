@@ -62,18 +62,19 @@ export const LoginScreen: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f4f7fb] px-4 py-8 text-[#0b1f3a] dark:bg-[#07111e] dark:text-slate-50 flex items-center justify-center">
       <div className="w-full max-w-md space-y-5">
-        <div className="rounded-2xl bg-[#0b1f3a] px-6 py-6 text-center text-white shadow-sm">
-          <div className="inline-flex items-center justify-center gap-2">
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">swimlog-duo</h1>
-            <span className="rounded-md border border-sky-400/35 bg-sky-400/15 px-2 py-0.5 text-[11px] font-semibold text-sky-200 whitespace-nowrap">
-              β ベータ版
-            </span>
-          </div>
-          <p className="mt-1.5 text-sm text-sky-100/90">
-            コーチ・選手 2人専用 水泳トレーニング記録
-          </p>
-          <div className="flex justify-center pt-3">
-            <PWAInstallButton />
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#0b1f3a] via-[#102d54] to-[#07111e] px-6 py-7 text-center text-white shadow-xl border border-[#183358]">
+          <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-[#0077b6]/20 blur-2xl pointer-events-none" />
+          <div className="relative z-10 flex flex-col items-center gap-2">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight">swimlog-duo</h1>
+            <div className="inline-flex items-center gap-2">
+              <span className="text-xs sm:text-sm text-sky-100/90 font-medium">水泳トレーニング記録</span>
+              <span className="rounded-md border border-sky-400/35 bg-sky-400/15 px-1.5 py-0.5 text-[10px] font-bold text-sky-200 uppercase">
+                β ベータ版
+              </span>
+            </div>
+            <div className="pt-2">
+              <PWAInstallButton />
+            </div>
           </div>
         </div>
 
