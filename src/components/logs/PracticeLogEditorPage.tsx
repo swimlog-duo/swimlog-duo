@@ -20,6 +20,17 @@ interface RowLogInput {
   impression: string;
 }
 
+interface PracticeLogDraft {
+  selectedDayId?: string;
+  practiceDate: string;
+  dayNote: string;
+  selectedVersionId: string;
+  totalTimeText: string;
+  entryRating: string;
+  entryImpression: string;
+  rowInputs: Record<string, RowLogInput>;
+}
+
 export const PracticeLogEditorPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const presetVersionId = searchParams.get('versionId') ?? '';
@@ -32,7 +43,6 @@ export const PracticeLogEditorPage: React.FC = () => {
   const userId = session?.userId ?? '';
   const isAthlete = session?.role === 'athlete';
 
-  // RLS permits athlete to attach only shared menu versions
   const sharedVersions = useMemo(() => {
     const sharedMenuIds = new Set(
       dataset.menus.filter((m) => m.is_shared && !m.is_archived).map((m) => m.id)
@@ -69,13 +79,22 @@ export const PracticeLogEditorPage: React.FC = () => {
   const [entryRating, setEntryRating] = useState('');
   const [entryImpression, setEntryImpression] = useState('');
   const [rowInputs, setRowInputs] = useState<Record<string, RowLogInput>>({});
+  const [draftRestored, setDraftRestored] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const submittedRef = useRef(false);
   const isDirtyRef = useRef(false);
   const loadedDraftScopeRef = useRef<string | null>(null);
+  const prevScopeRef = useRef<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const draftKey = `practice_log_new_${presetDayId || 'day'}`;
+
+  const latestDraftRef = useRef<{
+    userId: string;
+    draftKey: string;
+    payload: PracticeLogDraft;
+  } | null>(null);
 
   useEffect(() => {
     if (!selectedVersionId && sharedVersions.length > 0) {
@@ -91,46 +110,17 @@ export const PracticeLogEditorPage: React.FC = () => {
     [dataset.menu_versions, selectedVersionId, sharedVersions]
   );
 
+  // Keep latestDraftRef synchronized for immediate flush on pagehide/unmount
   useEffect(() => {
     if (!userId || !isAthlete) {
-      loadedDraftScopeRef.current = null;
+      latestDraftRef.current = null;
       return;
     }
-    const scope = `${userId}:${draftKey}:${presetDayId}:${presetVersionId}`;
-    if (loadedDraftScopeRef.current === scope) {
-      return;
-    }
-    loadedDraftScopeRef.current = scope;
-    isDirtyRef.current = false;
-
-    let cancelled = false;
-    void loadDraft<{
-      practiceDate: string;
-      dayNote: string;
-      selectedVersionId: string;
-      totalTimeText: string;
-      entryRating: string;
-      entryImpression: string;
-      rowInputs: Record<string, RowLogInput>;
-    }>(userId, draftKey).then((d) => {
-      if (cancelled || isDirtyRef.current || !d) return;
-      if (!presetDayId && d.practiceDate) setPracticeDate(d.practiceDate);
-      if (d.dayNote) setDayNote(d.dayNote);
-      if (!presetVersionId && d.selectedVersionId) setSelectedVersionId(d.selectedVersionId);
-      if (d.totalTimeText) setTotalTimeText(d.totalTimeText);
-      if (d.entryRating) setEntryRating(d.entryRating);
-      if (d.entryImpression) setEntryImpression(d.entryImpression);
-      if (d.rowInputs) setRowInputs(d.rowInputs);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [userId, isAthlete, draftKey, presetDayId, presetVersionId]);
-
-  useEffect(() => {
-    if (!userId || !isAthlete || !isDirtyRef.current) return;
-    const timer = window.setTimeout(() => {
-      void saveDraft(userId, draftKey, {
+    latestDraftRef.current = {
+      userId,
+      draftKey,
+      payload: {
+        selectedDayId,
         practiceDate,
         dayNote,
         selectedVersionId,
@@ -138,13 +128,13 @@ export const PracticeLogEditorPage: React.FC = () => {
         entryRating,
         entryImpression,
         rowInputs,
-      }).catch(() => {});
-    }, 400);
-    return () => window.clearTimeout(timer);
+      },
+    };
   }, [
     userId,
     isAthlete,
     draftKey,
+    selectedDayId,
     practiceDate,
     dayNote,
     selectedVersionId,
@@ -153,6 +143,150 @@ export const PracticeLogEditorPage: React.FC = () => {
     entryImpression,
     rowInputs,
   ]);
+
+  // StrictMode-safe & account-switch-safe draft hydration
+  useEffect(() => {
+    if (!userId || !isAthlete) {
+      loadedDraftScopeRef.current = null;
+      prevScopeRef.current = null;
+      return;
+    }
+
+    const scope = `${userId}:${draftKey}:${presetDayId}:${presetVersionId}`;
+    if (prevScopeRef.current !== null && prevScopeRef.current !== scope) {
+      setSelectedDayId(presetDayId || 'NEW');
+      setPracticeDate(new Date().toISOString().slice(0, 10));
+      setDayNote('');
+      setSelectedVersionId(presetVersionId || sharedVersions[0]?.id || '');
+      setTotalTimeText('');
+      setEntryRating('');
+      setEntryImpression('');
+      setRowInputs({});
+      setDraftRestored(false);
+      isDirtyRef.current = false;
+      submittedRef.current = false;
+    }
+    prevScopeRef.current = scope;
+
+    if (loadedDraftScopeRef.current === scope) {
+      return;
+    }
+    loadedDraftScopeRef.current = scope;
+    isDirtyRef.current = false;
+    submittedRef.current = false;
+
+    let cancelled = false;
+    let finished = false;
+
+    void loadDraft<PracticeLogDraft>(userId, draftKey)
+      .then((d) => {
+        finished = true;
+        if (cancelled || isDirtyRef.current || !d) return;
+        let restoredAny = false;
+        if (!presetDayId && d.selectedDayId) {
+          setSelectedDayId(d.selectedDayId);
+          restoredAny = true;
+        }
+        if (!presetDayId && d.practiceDate) {
+          setPracticeDate(d.practiceDate);
+          restoredAny = true;
+        }
+        if (d.dayNote) {
+          setDayNote(d.dayNote);
+          restoredAny = true;
+        }
+        if (!presetVersionId && d.selectedVersionId) {
+          setSelectedVersionId(d.selectedVersionId);
+          restoredAny = true;
+        }
+        if (d.totalTimeText) {
+          setTotalTimeText(d.totalTimeText);
+          restoredAny = true;
+        }
+        if (d.entryRating) {
+          setEntryRating(d.entryRating);
+          restoredAny = true;
+        }
+        if (d.entryImpression) {
+          setEntryImpression(d.entryImpression);
+          restoredAny = true;
+        }
+        if (d.rowInputs && Object.keys(d.rowInputs).length > 0) {
+          setRowInputs(d.rowInputs);
+          restoredAny = true;
+        }
+        if (restoredAny) {
+          setDraftRestored(true);
+        }
+      })
+      .catch(() => {
+        finished = true;
+      });
+
+    return () => {
+      cancelled = true;
+      if (!finished && loadedDraftScopeRef.current === scope) {
+        loadedDraftScopeRef.current = null;
+      }
+    };
+  }, [userId, isAthlete, draftKey, presetDayId, presetVersionId, sharedVersions]);
+
+  // Debounced auto-save when dirty
+  useEffect(() => {
+    if (!userId || !isAthlete || !isDirtyRef.current || submittedRef.current) return;
+    const payload: PracticeLogDraft = {
+      selectedDayId,
+      practiceDate,
+      dayNote,
+      selectedVersionId,
+      totalTimeText,
+      entryRating,
+      entryImpression,
+      rowInputs,
+    };
+    const timer = window.setTimeout(() => {
+      if (isDirtyRef.current && !submittedRef.current) {
+        void saveDraft(userId, draftKey, payload).catch(() => {});
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [
+    userId,
+    isAthlete,
+    draftKey,
+    selectedDayId,
+    practiceDate,
+    dayNote,
+    selectedVersionId,
+    totalTimeText,
+    entryRating,
+    entryImpression,
+    rowInputs,
+  ]);
+
+  // Flush dirty draft immediately on pagehide / visibilitychange / unmount
+  useEffect(() => {
+    const flushNow = () => {
+      if (!isDirtyRef.current || submittedRef.current) return;
+      const latest = latestDraftRef.current;
+      if (!latest) return;
+      void saveDraft(latest.userId, latest.draftKey, latest.payload).catch(() => {});
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushNow();
+      }
+    };
+
+    window.addEventListener('pagehide', flushNow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', flushNow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      flushNow();
+    };
+  }, []);
 
   const executableRows = useMemo(
     () => (activeVersion?.content?.rows ?? []).filter((r) => !r.is_group_header),
@@ -165,8 +299,8 @@ export const PracticeLogEditorPage: React.FC = () => {
 
   if (!isAthlete) {
     return (
-      <div className="rounded-3xl border border-rose-300 bg-rose-50 p-6 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
-        練習日・実施記録の新規作成は選手アカウントのみ実行できます（RLS制約）。コーチは既存記録の閲覧・編集・コメントが可能です。
+      <div className="rounded-2xl border border-rose-300 bg-rose-50 p-6 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
+        練習記録の入力は選手アカウントのみ操作できます。コーチは記録の確認・編集・コメントが可能です。
       </div>
     );
   }
@@ -198,7 +332,7 @@ export const PracticeLogEditorPage: React.FC = () => {
     if (totalTimeText.trim()) {
       parsedTotalTimeMs = parseTimeInputToMs(totalTimeText);
       if (parsedTotalTimeMs === null) {
-        setErrorMsg('全体合計時間の形式が正しくありません（例: 45:00 または 1:12.50）。');
+        setErrorMsg('合計時間の形式が正しくありません（例: 45:00 または 1:12.50）。');
         return;
       }
     }
@@ -290,6 +424,7 @@ export const PracticeLogEditorPage: React.FC = () => {
         set_results: preparedSets,
       });
 
+      submittedRef.current = true;
       isDirtyRef.current = false;
       if (userId) {
         await deleteDraft(userId, draftKey);
@@ -306,13 +441,19 @@ export const PracticeLogEditorPage: React.FC = () => {
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-50">
-          練習記録を入力（オフライン対応）
+        <h1 className="text-xl font-bold text-[#0b1f3a] dark:text-slate-50">
+          練習日の登録
         </h1>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          入力内容はリアルタイムで端末に下書き保存され、オフラインでも記録を確定できます。
+          入力内容は自動で端末に下書き保存され、オフラインでも記録できます。
         </p>
       </div>
+
+      {draftRestored && (
+        <div className="rounded-2xl border border-[#0077b6]/25 bg-[#0077b6]/5 px-4 py-2.5 text-xs font-medium text-[#0b1f3a] dark:border-[#38bdf8]/30 dark:bg-[#0e1b2e] dark:text-sky-200">
+          入力途中の下書きを復元しました。
+        </div>
+      )}
 
       {errorMsg && (
         <div className="rounded-2xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
@@ -321,21 +462,25 @@ export const PracticeLogEditorPage: React.FC = () => {
       )}
 
       {/* Day & Menu Version Selection */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              練習日枠
+            <label
+              htmlFor="log-day-select"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
+              記録先の練習日
             </label>
             <select
+              id="log-day-select"
               value={selectedDayId}
               onChange={(e) => {
                 isDirtyRef.current = true;
                 setSelectedDayId(e.target.value);
               }}
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
             >
-              <option value="NEW">新しい練習日を作成（同日があれば統合）</option>
+              <option value="NEW">新しい練習日を登録（同日があれば統合）</option>
               {activeDays.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.practice_date} に追加メニューとして記録
@@ -346,10 +491,14 @@ export const PracticeLogEditorPage: React.FC = () => {
 
           {selectedDayId === 'NEW' && (
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                練習日
+              <label
+                htmlFor="log-practice-date"
+                className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+              >
+                練習日（必須）
               </label>
               <input
+                id="log-practice-date"
                 type="date"
                 required
                 value={practiceDate}
@@ -357,7 +506,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                   isDirtyRef.current = true;
                   setPracticeDate(e.target.value);
                 }}
-                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
               />
             </div>
           )}
@@ -365,10 +514,14 @@ export const PracticeLogEditorPage: React.FC = () => {
 
         {selectedDayId === 'NEW' && (
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              練習日の全体メモ・コンディション
+            <label
+              htmlFor="log-day-note"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
+              その日のメモ・体調
             </label>
             <input
+              id="log-day-note"
               type="text"
               value={dayNote}
               onChange={(e) => {
@@ -376,23 +529,27 @@ export const PracticeLogEditorPage: React.FC = () => {
                 setDayNote(e.target.value);
               }}
               placeholder="例: 朝練 25mプール 体調良好"
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
             />
           </div>
         )}
 
         <div>
-          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            使用する共有中メニュー（バージョン固定）
+          <label
+            htmlFor="log-menu-version-select"
+            className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+          >
+            使った練習メニュー（必須）
           </label>
           <select
+            id="log-menu-version-select"
             value={activeVersion?.id ?? ''}
             onChange={(e) => {
               isDirtyRef.current = true;
               setSelectedVersionId(e.target.value);
             }}
             required
-            className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+            className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
           >
             {sharedVersions.length === 0 ? (
               <option value="">共有中のメニューがありません</option>
@@ -406,17 +563,17 @@ export const PracticeLogEditorPage: React.FC = () => {
           </select>
           {activeVersion && (
             <p className="mt-1 font-mono-num text-xs text-slate-500 dark:text-slate-400">
-              総距離 {formatDistanceM(metrics.totalDistanceM)} · {executableRows.length}セット項目
+              総距離 {formatDistanceM(metrics.totalDistanceM)} · {executableRows.length}項目
             </p>
           )}
         </div>
       </section>
 
-      {/* Set-by-Set Logging while viewing full menu */}
+      {/* Set-by-Set Logging */}
       {activeVersion && (
         <section className="space-y-3">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-            セットごとのタイム・感想記録
+          <h2 className="text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+            セットごとのタイム・感想
           </h2>
 
           {(activeVersion.content?.rows ?? []).map((row) => {
@@ -424,7 +581,7 @@ export const PracticeLogEditorPage: React.FC = () => {
               return (
                 <div
                   key={row.id}
-                  className="rounded-xl bg-slate-200/70 px-3 py-2 text-xs font-bold text-slate-800 dark:bg-slate-800 dark:text-slate-100"
+                  className="rounded-xl bg-[#0b1f3a]/8 px-3.5 py-2 text-xs font-bold text-[#0b1f3a] dark:bg-[#16345b]/60 dark:text-slate-100"
                 >
                   {row.instruction || row.free_text || 'セクション'}
                 </div>
@@ -438,14 +595,15 @@ export const PracticeLogEditorPage: React.FC = () => {
               impression: '',
             };
             const dist = computeRowDistance(row);
+            const rowBase = `log-row-${row.id}`;
             return (
               <div
                 key={row.id}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3"
+                className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3"
               >
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div className="text-sm font-bold text-slate-900 dark:text-slate-50">
-                    <span className="text-sky-700 dark:text-sky-400 mr-2">
+                  <div className="text-sm font-bold text-[#0b1f3a] dark:text-slate-50">
+                    <span className="text-[#0077b6] dark:text-[#38bdf8] mr-2">
                       [{row.block_type}]
                     </span>
                     <span className="font-mono-num">
@@ -469,43 +627,55 @@ export const PracticeLogEditorPage: React.FC = () => {
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${rowBase}-time`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       代表タイム（例 31.45 / 1:05.20）
                     </label>
                     <input
+                      id={`${rowBase}-time`}
                       type="text"
                       value={val.time_text}
                       onChange={(e) =>
                         updateRowInput(row.id, { time_text: e.target.value })
                       }
                       placeholder="31.45"
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${rowBase}-splits`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       各本ラップ（カンマ区切り）
                     </label>
                     <input
+                      id={`${rowBase}-splits`}
                       type="text"
                       value={val.splits_text}
                       onChange={(e) =>
                         updateRowInput(row.id, { splits_text: e.target.value })
                       }
                       placeholder="31.2, 31.5, 31.8"
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${rowBase}-rating`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       セット評価 (1〜5)
                     </label>
                     <select
+                      id={`${rowBase}-rating`}
                       value={val.rating}
                       onChange={(e) => updateRowInput(row.id, { rating: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     >
                       <option value="">未選択</option>
                       {[1, 2, 3, 4, 5].map((n) => (
@@ -518,14 +688,21 @@ export const PracticeLogEditorPage: React.FC = () => {
                 </div>
 
                 <div>
+                  <label
+                    htmlFor={`${rowBase}-impression`}
+                    className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                  >
+                    セットのメモ
+                  </label>
                   <input
+                    id={`${rowBase}-impression`}
                     type="text"
                     value={val.impression}
                     onChange={(e) =>
                       updateRowInput(row.id, { impression: e.target.value })
                     }
                     placeholder="このセットの感覚・メモ"
-                    className="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                   />
                 </div>
               </div>
@@ -535,16 +712,20 @@ export const PracticeLogEditorPage: React.FC = () => {
       )}
 
       {/* Overall Entry Summary */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
-        <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
+        <h2 className="text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
           メニュー全体の振り返り
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-              経過・合計時間（例 45:00 または 1:12.50）
+            <label
+              htmlFor="log-total-time"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
+              合計時間（例 45:00 または 1:12.50）
             </label>
             <input
+              id="log-total-time"
               type="text"
               value={totalTimeText}
               onChange={(e) => {
@@ -552,21 +733,25 @@ export const PracticeLogEditorPage: React.FC = () => {
                 setTotalTimeText(e.target.value);
               }}
               placeholder="45:00"
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+            <label
+              htmlFor="log-entry-rating"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
               全体評価 (1〜5)
             </label>
             <select
+              id="log-entry-rating"
               value={entryRating}
               onChange={(e) => {
                 isDirtyRef.current = true;
                 setEntryRating(e.target.value);
               }}
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
             >
               <option value="">未選択</option>
               {[1, 2, 3, 4, 5].map((n) => (
@@ -579,10 +764,14 @@ export const PracticeLogEditorPage: React.FC = () => {
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-            感想・追加メモ
+          <label
+            htmlFor="log-entry-impression"
+            className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+          >
+            感想・メモ
           </label>
           <textarea
+            id="log-entry-impression"
             rows={3}
             value={entryImpression}
             onChange={(e) => {
@@ -590,14 +779,14 @@ export const PracticeLogEditorPage: React.FC = () => {
               setEntryImpression(e.target.value);
             }}
             placeholder="泳ぎの感触、課題、良かった点など"
-            className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+            className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-[#07111e]"
           />
         </div>
 
         <button
           type="submit"
           disabled={submitting || !activeVersion}
-          className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+          className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#0077b6] px-6 text-sm font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
         >
           <Save className="h-4 w-4" />
           <span>{submitting ? '保存中...' : '練習記録を保存する'}</span>

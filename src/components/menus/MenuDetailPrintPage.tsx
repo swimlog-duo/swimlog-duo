@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { Archive, Edit3, Eye, EyeOff, Printer } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useSwimData } from '../../hooks/useSwimData';
+import type { MenuStatusHistoryRow } from '../../types/database';
 import {
   calculateMenuMetrics,
   computeRowDistance,
@@ -10,6 +11,17 @@ import {
   formatDistanceM,
   formatMenuStatusLabel,
 } from '../../utils/swimCalculations';
+
+function formatStateSnapshot(isShared: boolean, isArchived: boolean): string {
+  if (isArchived) return 'アーカイブ';
+  return isShared ? '共有中' : '非共有';
+}
+
+function formatStatusTransition(h: MenuStatusHistoryRow): string {
+  const before = formatStateSnapshot(h.old_is_shared, h.old_is_archived);
+  const after = formatStateSnapshot(h.new_is_shared, h.new_is_archived);
+  return `${before} → ${after}`;
+}
 
 export const MenuDetailPrintPage: React.FC = () => {
   const { menuId } = useParams<{ menuId: string }>();
@@ -52,7 +64,7 @@ export const MenuDetailPrintPage: React.FC = () => {
 
   if (!menu || !activeVersion) {
     return (
-      <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+      <div className="rounded-2xl border border-slate-200/80 bg-white p-8 text-center text-sm text-slate-600 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] dark:text-slate-300">
         メニューが見つからないか、閲覧権限がありません。
       </div>
     );
@@ -85,15 +97,19 @@ export const MenuDetailPrintPage: React.FC = () => {
       )}
 
       {/* Control Toolbar (Hidden in Print) */}
-      <div className="no-print flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+      <div className="no-print flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e]">
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-            バージョン:
+          <label
+            htmlFor="menu-version-select"
+            className="text-xs font-semibold text-slate-600 dark:text-slate-300"
+          >
+            表示する版
           </label>
           <select
+            id="menu-version-select"
             value={activeVersion.id}
             onChange={(e) => setSelectedVersionId(e.target.value)}
-            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-mono-num dark:border-slate-700 dark:bg-slate-950"
+            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm font-mono-num dark:border-slate-700 dark:bg-[#07111e]"
           >
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
@@ -139,7 +155,7 @@ export const MenuDetailPrintPage: React.FC = () => {
 
               <Link
                 to={`/menus/${menu.id}/revise`}
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-sky-600 px-4 text-xs font-semibold text-white hover:bg-sky-700"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
               >
                 <Edit3 className="h-4 w-4" />
                 <span>改訂（新版作成）</span>
@@ -183,7 +199,7 @@ export const MenuDetailPrintPage: React.FC = () => {
           {!isCoach && (
             <Link
               to={`/logs/new?versionId=${activeVersion.id}`}
-              className="inline-flex min-h-[44px] items-center rounded-xl bg-sky-600 px-4 text-xs font-semibold text-white hover:bg-sky-700"
+              className="inline-flex min-h-[44px] items-center rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
             >
               このメニューで記録開始
             </Link>
@@ -192,18 +208,18 @@ export const MenuDetailPrintPage: React.FC = () => {
       </div>
 
       {/* Poolside / Print-ready Single-Screen Menu Sheet */}
-      <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-5">
+      <article className="rounded-2xl border border-slate-200/80 bg-white p-5 sm:p-6 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-5">
         <header className="border-b border-slate-200 pb-4 dark:border-slate-800">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">
+            <h1 className="text-xl sm:text-2xl font-bold text-[#0b1f3a] dark:text-slate-50">
               {activeVersion.title}
             </h1>
-            <span className="font-mono-num text-xl font-bold text-sky-600 dark:text-sky-400">
-              Total {formatDistanceM(metrics.totalDistanceM)}
+            <span className="font-mono-num text-xl font-bold text-[#0077b6] dark:text-[#38bdf8]">
+              合計 {formatDistanceM(metrics.totalDistanceM)}
             </span>
           </div>
-          <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500 dark:text-slate-400 font-mono-num">
-            <span>Version {activeVersion.version_no}</span>
+          <div className="mt-1.5 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono-num">
+            <span>第{activeVersion.version_no}版</span>
             <span aria-hidden="true">·</span>
             <span>作成日 {activeVersion.created_at.slice(0, 10)}</span>
             {metrics.byIntensity.map((b) => (
@@ -214,7 +230,57 @@ export const MenuDetailPrintPage: React.FC = () => {
           </div>
         </header>
 
-        <div className="overflow-x-auto">
+        {/* Mobile Readable Card List (< 768px, hidden in print) */}
+        <div className="md:hidden print:hidden space-y-2.5">
+          {rows.map((row) => {
+            if (row.is_group_header) {
+              return (
+                <div
+                  key={row.id}
+                  className="rounded-xl bg-[#0b1f3a]/8 px-3.5 py-2 text-xs font-bold text-[#0b1f3a] dark:bg-[#16345b]/60 dark:text-slate-100"
+                >
+                  {row.instruction || row.free_text || 'セクション'}
+                </div>
+              );
+            }
+            const rowDist = computeRowDistance(row);
+            const memo = [row.instruction, row.free_text].filter(Boolean).join(' / ');
+            return (
+              <div
+                key={row.id}
+                className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-[#07111e]/60 space-y-1.5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+                    <span className="text-xs font-semibold text-[#0077b6] dark:text-[#38bdf8]">
+                      {row.block_type}
+                    </span>
+                    <span className="font-mono-num">
+                      {row.distance_m}m × {row.reps}t × {row.sets}s
+                    </span>
+                    <span>{row.stroke}</span>
+                  </div>
+                  <div className="font-mono-num text-xs font-bold text-[#0077b6] dark:text-[#38bdf8]">
+                    {row.intensity} · {formatDistanceM(rowDist)}
+                  </div>
+                </div>
+                {(row.circle || row.hr) && (
+                  <div className="font-mono-num text-xs text-slate-600 dark:text-slate-300">
+                    {row.circle ? `サークル ${row.circle}` : ''}
+                    {row.circle && row.hr ? ' · ' : ''}
+                    {row.hr ? `HR ${row.hr}` : ''}
+                  </div>
+                )}
+                {memo && (
+                  <p className="text-xs text-slate-600 dark:text-slate-300">{memo}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop & Print Table */}
+        <div className="hidden md:block print:block overflow-x-auto">
           <table className="w-full text-left text-sm border-collapse">
             <thead>
               <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 dark:border-slate-800 dark:text-slate-400">
@@ -237,7 +303,7 @@ export const MenuDetailPrintPage: React.FC = () => {
                     >
                       <td
                         colSpan={7}
-                        className="py-2 px-2 text-xs font-bold text-slate-800 dark:text-slate-100"
+                        className="py-2 px-2 text-xs font-bold text-[#0b1f3a] dark:text-slate-100"
                       >
                         {row.instruction || row.free_text || 'セクション'}
                       </td>
@@ -250,13 +316,13 @@ export const MenuDetailPrintPage: React.FC = () => {
                     <td className="py-2.5 pr-3 text-xs font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap">
                       {row.block_type}
                     </td>
-                    <td className="py-2.5 pr-3 font-mono-num font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                    <td className="py-2.5 pr-3 font-mono-num font-semibold text-[#0b1f3a] dark:text-slate-100 whitespace-nowrap">
                       {row.distance_m}m × {row.reps}t × {row.sets}s
                     </td>
                     <td className="py-2.5 pr-3 text-xs font-semibold whitespace-nowrap">
                       {row.stroke}
                     </td>
-                    <td className="py-2.5 pr-3 font-mono-num text-xs font-bold text-sky-700 dark:text-sky-300 whitespace-nowrap">
+                    <td className="py-2.5 pr-3 font-mono-num text-xs font-bold text-[#0077b6] dark:text-[#38bdf8] whitespace-nowrap">
                       {row.intensity}
                     </td>
                     <td className="py-2.5 pr-3 font-mono-num text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">
@@ -278,16 +344,15 @@ export const MenuDetailPrintPage: React.FC = () => {
 
       {/* Coach-only Status History */}
       {isCoach && statusHistory.length > 0 && (
-        <section className="no-print rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-2">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100">
-            共有状態変更履歴（コーチのみ閲覧可）
+        <section className="no-print rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-2">
+          <h2 className="text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+            共有状態の変更履歴（コーチのみ）
           </h2>
           <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
             {statusHistory.map((h) => (
               <div key={h.id} className="py-2 flex items-center justify-between gap-2">
-                <span className="text-slate-700 dark:text-slate-300">
-                  共有: {String(h.old_is_shared)} → {String(h.new_is_shared)} · アーカイブ:{' '}
-                  {String(h.old_is_archived)} → {String(h.new_is_archived)}
+                <span className="font-medium text-slate-700 dark:text-slate-300">
+                  {formatStatusTransition(h)}
                 </span>
                 <span className="font-mono-num text-slate-500 dark:text-slate-400">
                   {h.changed_at.slice(0, 16).replace('T', ' ')}

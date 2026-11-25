@@ -106,29 +106,29 @@ export const AnalyticsPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2">
-        <BarChart3 className="h-5 w-5 text-sky-600 dark:text-sky-400" />
-        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-50">
-          練習データ集計・分析
+        <BarChart3 className="h-5 w-5 text-[#0077b6] dark:text-[#38bdf8]" />
+        <h1 className="text-xl font-bold text-[#0b1f3a] dark:text-slate-50">
+          練習データの分析
         </h1>
       </div>
 
       {/* Totals */}
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e]">
           <div className="text-xs text-slate-500 dark:text-slate-400">累計総距離</div>
-          <div className="mt-1 font-mono-num text-2xl font-bold text-slate-900 dark:text-slate-50">
+          <div className="mt-1 font-mono-num text-2xl font-bold text-[#0b1f3a] dark:text-slate-50">
             {formatDistanceM(aggregate.totalDistance)}
           </div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="text-xs text-slate-500 dark:text-slate-400">実施セッション数</div>
-          <div className="mt-1 font-mono-num text-2xl font-bold text-slate-900 dark:text-slate-50">
-            {activeEntries.length}本 ({activeDays.length}日)
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e]">
+          <div className="text-xs text-slate-500 dark:text-slate-400">実施回数</div>
+          <div className="mt-1 font-mono-num text-2xl font-bold text-[#0b1f3a] dark:text-slate-50">
+            {activeDays.length}日 / {activeEntries.length}回
           </div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="text-xs text-slate-500 dark:text-slate-400">記録合計時間</div>
-          <div className="mt-1 font-mono-num text-2xl font-bold text-slate-900 dark:text-slate-50">
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e]">
+          <div className="text-xs text-slate-500 dark:text-slate-400">合計時間</div>
+          <div className="mt-1 font-mono-num text-2xl font-bold text-[#0b1f3a] dark:text-slate-50">
             {aggregate.totalDurationMs > 0
               ? formatTimeMs(aggregate.totalDurationMs)
               : '—'}
@@ -137,20 +137,20 @@ export const AnalyticsPage: React.FC = () => {
       </section>
 
       {/* Intensity Breakdown */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
-        <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-          強度別距離と割合（アプリ側自動集計）
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
+        <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+          強度別の距離と割合
         </h2>
         {aggregate.intensityList.length === 0 ? (
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            記録されたセッションがまだありません。
+            記録された練習がまだありません。
           </p>
         ) : (
           <div className="space-y-3">
             {aggregate.intensityList.map((row) => (
               <div key={row.intensity} className="space-y-1">
                 <div className="flex items-center justify-between text-xs font-mono-num">
-                  <span className="font-bold text-slate-900 dark:text-slate-100">
+                  <span className="font-bold text-[#0b1f3a] dark:text-slate-100">
                     {row.intensity}
                   </span>
                   <span className="text-slate-600 dark:text-slate-300">
@@ -159,7 +159,7 @@ export const AnalyticsPage: React.FC = () => {
                 </div>
                 <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
                   <div
-                    className="h-full rounded-full bg-sky-600 dark:bg-sky-400"
+                    className="h-full rounded-full bg-[#0077b6] dark:bg-[#38bdf8]"
                     style={{ width: `${Math.min(100, row.pct)}%` }}
                   />
                 </div>
@@ -170,22 +170,31 @@ export const AnalyticsPage: React.FC = () => {
       </section>
 
       {/* Time Trend */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
+          <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
             過去のタイム推移
           </h2>
-          <select
-            value={strokeFilter}
-            onChange={(e) => setStrokeFilter(e.target.value)}
-            className="min-h-[40px] rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold dark:border-slate-700 dark:bg-slate-950"
-          >
-            {STROKE_TYPES.map((s) => (
-              <option key={s} value={s}>
-                種目: {s}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2">
+            <label
+              htmlFor="analytics-stroke-filter"
+              className="text-xs font-semibold text-slate-600 dark:text-slate-300"
+            >
+              種目
+            </label>
+            <select
+              id="analytics-stroke-filter"
+              value={strokeFilter}
+              onChange={(e) => setStrokeFilter(e.target.value)}
+              className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold dark:border-slate-700 dark:bg-[#07111e]"
+            >
+              {STROKE_TYPES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {timeTrend.length === 0 ? (
@@ -202,13 +211,13 @@ export const AnalyticsPage: React.FC = () => {
                     <span className="text-slate-600 dark:text-slate-300">
                       {pt.date} · {pt.label}
                     </span>
-                    <span className="font-bold text-slate-900 dark:text-slate-50">
+                    <span className="font-bold text-[#0b1f3a] dark:text-slate-50">
                       {formatTimeMs(pt.time_ms)}
                     </span>
                   </div>
                   <div className="h-2 w-full rounded-full bg-slate-100 dark:bg-slate-800">
                     <div
-                      className="h-full rounded-full bg-sky-600 dark:bg-sky-400"
+                      className="h-full rounded-full bg-[#0077b6] dark:bg-[#38bdf8]"
                       style={{ width: `${widthPct}%` }}
                     />
                   </div>
@@ -219,11 +228,11 @@ export const AnalyticsPage: React.FC = () => {
         )}
       </section>
 
-      {/* Local Competition Countdown */}
+      {/* Competition Countdown */}
       {upcomingComps.length > 0 && (
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-3">
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-            大会カウントダウン（端末ローカル保存）
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3">
+          <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+            大会カウントダウン
           </h2>
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
             {upcomingComps.map((c) => {
@@ -235,14 +244,14 @@ export const AnalyticsPage: React.FC = () => {
               return (
                 <div key={c.id} className="py-2.5 flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    <div className="text-sm font-semibold text-[#0b1f3a] dark:text-slate-100">
                       {c.name}
                     </div>
                     <div className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
                       {c.event_date} {c.note ? `· ${c.note}` : ''}
                     </div>
                   </div>
-                  <div className="font-mono-num text-lg font-bold text-sky-600 dark:text-sky-400">
+                  <div className="font-mono-num text-lg font-bold text-[#0077b6] dark:text-[#38bdf8]">
                     あと {daysLeft}日
                   </div>
                 </div>

@@ -15,7 +15,6 @@ import {
   computeRowDistance,
   createRowId,
   formatDistanceM,
-  MAX_MENU_CONTENT_BYTES,
   MAX_MENU_ROWS,
   validateMenuVersionInput,
 } from '../../utils/swimCalculations';
@@ -47,6 +46,7 @@ export const MenuEditorPage: React.FC = () => {
   const { session } = useAuth();
   const { dataset, createMenu, reviseMenu } = useSwimData();
   const isCoach = session?.role === 'coach';
+  const userId = session?.userId ?? '';
   const isRevisionMode = Boolean(menuId);
 
   const sourceMenuId = menuId ?? copyFromId;
@@ -82,10 +82,12 @@ export const MenuEditorPage: React.FC = () => {
   const [shareAfter, setShareAfter] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const submittedRef = useRef(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
   const isDirtyRef = useRef(false);
   const hydratedVersionIdRef = useRef<string | null>(sourceLatestVersion?.id ?? null);
+  const loadedDraftScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!sourceLatestVersion) return;
@@ -109,10 +111,23 @@ export const MenuEditorPage: React.FC = () => {
   }, [sourceLatestVersion, isRevisionMode]);
 
   useEffect(() => {
-    if (!session || sourceMenuId) return;
-    void loadDraft<{ title: string; rows: MenuItemRow[] }>(session.userId, draftKey).then(
-      (draft) => {
-        if (isDirtyRef.current) return;
+    if (!userId || !isCoach || sourceMenuId) {
+      loadedDraftScopeRef.current = null;
+      return;
+    }
+    const scope = `${userId}:${draftKey}`;
+    if (loadedDraftScopeRef.current === scope) return;
+
+    loadedDraftScopeRef.current = scope;
+    isDirtyRef.current = false;
+    submittedRef.current = false;
+    let cancelled = false;
+    let finished = false;
+
+    void loadDraft<{ title: string; rows: MenuItemRow[] }>(userId, draftKey)
+      .then((draft) => {
+        finished = true;
+        if (cancelled || isDirtyRef.current) return;
         if (draft && (draft.title || draft.rows?.length)) {
           setTitle(draft.title ?? '');
           if (Array.isArray(draft.rows) && draft.rows.length > 0) {
@@ -120,25 +135,34 @@ export const MenuEditorPage: React.FC = () => {
           }
           setDraftRestored(true);
         }
+      })
+      .catch(() => {
+        finished = true;
+      });
+
+    return () => {
+      cancelled = true;
+      if (!finished && loadedDraftScopeRef.current === scope) {
+        loadedDraftScopeRef.current = null;
       }
-    );
-  }, [session, sourceMenuId, draftKey]);
+    };
+  }, [userId, isCoach, sourceMenuId, draftKey]);
 
   useEffect(() => {
-    if (!session || !isCoach) return;
+    if (!userId || !isCoach || !isDirtyRef.current || submittedRef.current) return;
     const timer = window.setTimeout(() => {
-      void saveDraft(session.userId, draftKey, { title, rows });
-    }, 400);
+      void saveDraft(userId, draftKey, { title, rows }).catch(() => {});
+    }, 300);
     return () => window.clearTimeout(timer);
-  }, [session, isCoach, draftKey, title, rows]);
+  }, [userId, isCoach, draftKey, title, rows]);
 
   const metrics = useMemo(() => calculateMenuMetrics(rows), [rows]);
   const validation = useMemo(() => validateMenuVersionInput(title, rows), [title, rows]);
 
   if (!isCoach) {
     return (
-      <div className="rounded-3xl border border-rose-300 bg-rose-50 p-6 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
-        メニューの作成・改訂はコーチアカウントのみ許可されています（RLS制約）。
+      <div className="rounded-2xl border border-rose-300 bg-rose-50 p-6 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
+        メニューの作成・改訂はコーチアカウントのみ操作できます。
       </div>
     );
   }
@@ -191,7 +215,9 @@ export const MenuEditorPage: React.FC = () => {
           rows,
           shareAfter,
         });
-        if (session) await deleteDraft(session.userId, draftKey);
+        submittedRef.current = true;
+        isDirtyRef.current = false;
+        if (userId) await deleteDraft(userId, draftKey);
         navigate(`/menus/${menuId}`);
       } else {
         const newId = await createMenu({
@@ -199,7 +225,9 @@ export const MenuEditorPage: React.FC = () => {
           rows,
           shareNow: shareAfter,
         });
-        if (session) await deleteDraft(session.userId, draftKey);
+        submittedRef.current = true;
+        isDirtyRef.current = false;
+        if (userId) await deleteDraft(userId, draftKey);
         navigate(`/menus/${newId}`);
       }
     } catch (err) {
@@ -214,20 +242,20 @@ export const MenuEditorPage: React.FC = () => {
     <form onSubmit={handleSave} className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-50">
+          <h1 className="text-xl font-bold text-[#0b1f3a] dark:text-slate-50">
             {isRevisionMode ? 'メニュー改訂（新バージョン作成）' : '新しい練習メニューを作成'}
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {isRevisionMode
-              ? '過去のバージョンは不変として保持され、新しいバージョン番号が追加されます。'
-              : 'menu_versions.content.rows のみ保存し、総距離・強度割合はアプリ側で自動集計します。'}
+              ? 'これまでの版を残したまま、新しいバージョンを作成します。'
+              : '練習ブロックを追加すると、総距離と強度割合が自動で計算されます。'}
           </p>
         </div>
       </div>
 
       {draftRestored && (
-        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-xs text-sky-900 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-200">
-          入力途中の下書きを自動復元しました。
+        <div className="rounded-2xl border border-[#0077b6]/25 bg-[#0077b6]/5 px-4 py-2.5 text-xs font-medium text-[#0b1f3a] dark:border-[#38bdf8]/30 dark:bg-[#0e1b2e] dark:text-sky-200">
+          入力途中の下書きを復元しました。
         </div>
       )}
 
@@ -238,13 +266,13 @@ export const MenuEditorPage: React.FC = () => {
       )}
 
       {/* Title & Live Metrics Summary */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
         <div>
           <label
             htmlFor="menu-title"
             className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
           >
-            メニュー名（1〜200文字）
+            メニュー名（必須・1〜200文字）
           </label>
           <input
             id="menu-title"
@@ -257,14 +285,14 @@ export const MenuEditorPage: React.FC = () => {
               setTitle(e.target.value);
             }}
             placeholder="例: 2026-11-23 朝練 スピード持久"
-            className="mt-1.5 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-sky-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            className="mt-1.5 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-[#0b1f3a] focus:border-[#0077b6] focus:outline-none dark:border-slate-700 dark:bg-[#07111e] dark:text-slate-100"
           />
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-3 dark:border-slate-800">
           <div className="space-y-1">
-            <div className="text-xs text-slate-500 dark:text-slate-400">自動計算 総距離</div>
-            <div className="font-mono-num text-2xl font-bold text-sky-600 dark:text-sky-400">
+            <div className="text-xs text-slate-500 dark:text-slate-400">総距離</div>
+            <div className="font-mono-num text-2xl font-bold text-[#0077b6] dark:text-[#38bdf8]">
               {formatDistanceM(metrics.totalDistanceM)}
             </div>
           </div>
@@ -279,8 +307,7 @@ export const MenuEditorPage: React.FC = () => {
           </div>
 
           <div className="text-xs font-mono-num text-slate-500 dark:text-slate-400">
-            {rows.length}/{MAX_MENU_ROWS}行 · {validation.byteLength.toLocaleString()}/
-            {MAX_MENU_CONTENT_BYTES.toLocaleString()}B
+            {rows.length}/{MAX_MENU_ROWS}行
           </div>
         </div>
       </section>
@@ -289,31 +316,32 @@ export const MenuEditorPage: React.FC = () => {
       <section className="space-y-3">
         {rows.map((row, index) => {
           const rowDist = computeRowDistance(row);
+          const idBase = `menu-row-${row.id}`;
           return (
             <div
               key={row.id}
-              className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3"
+              className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-3">
                   <span className="font-mono-num text-xs font-bold text-slate-500 dark:text-slate-400">
                     #{index + 1}
                   </span>
-                  <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 min-h-[36px]">
+                  <label className="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 min-h-[44px] cursor-pointer">
                     <input
                       type="checkbox"
                       checked={Boolean(row.is_group_header)}
                       onChange={(e) =>
                         updateRow(index, { is_group_header: e.target.checked })
                       }
-                      className="h-4 w-4 rounded border-slate-300 text-sky-600"
+                      className="h-4 w-4 rounded border-slate-300 text-[#0077b6]"
                     />
                     <span>見出し行（距離加算しない）</span>
                   </label>
                 </div>
 
                 <div className="flex items-center gap-1">
-                  <span className="font-mono-num text-xs font-bold text-slate-800 dark:text-slate-200 mr-2">
+                  <span className="font-mono-num text-xs font-bold text-[#0b1f3a] dark:text-slate-200 mr-2">
                     {row.is_group_header ? '見出し' : formatDistanceM(rowDist)}
                   </span>
                   <button
@@ -347,15 +375,19 @@ export const MenuEditorPage: React.FC = () => {
               </div>
 
               {!row.is_group_header && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${idBase}-block`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       練習タイプ
                     </label>
                     <select
+                      id={`${idBase}-block`}
                       value={row.block_type}
                       onChange={(e) => updateRow(index, { block_type: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     >
                       {BLOCK_TYPES.map((t) => (
                         <option key={t} value={t}>
@@ -366,13 +398,17 @@ export const MenuEditorPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${idBase}-stroke`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       種目
                     </label>
                     <select
+                      id={`${idBase}-stroke`}
                       value={row.stroke}
                       onChange={(e) => updateRow(index, { stroke: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     >
                       {STROKE_TYPES.map((s) => (
                         <option key={s} value={s}>
@@ -383,13 +419,17 @@ export const MenuEditorPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${idBase}-intensity`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       強度
                     </label>
                     <select
+                      id={`${idBase}-intensity`}
                       value={row.intensity}
                       onChange={(e) => updateRow(index, { intensity: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     >
                       {INTENSITY_LEVELS.map((lvl) => (
                         <option key={lvl} value={lvl}>
@@ -400,10 +440,14 @@ export const MenuEditorPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${idBase}-distance`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       距離 (m)
                     </label>
                     <input
+                      id={`${idBase}-distance`}
                       type="number"
                       inputMode="numeric"
                       min={0}
@@ -412,15 +456,19 @@ export const MenuEditorPage: React.FC = () => {
                       onChange={(e) =>
                         updateRow(index, { distance_m: Math.max(0, Number(e.target.value)) })
                       }
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${idBase}-reps`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       回数 (t)
                     </label>
                     <input
+                      id={`${idBase}-reps`}
                       type="number"
                       inputMode="numeric"
                       min={1}
@@ -428,15 +476,19 @@ export const MenuEditorPage: React.FC = () => {
                       onChange={(e) =>
                         updateRow(index, { reps: Math.max(1, Number(e.target.value)) })
                       }
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    <label
+                      htmlFor={`${idBase}-sets`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
                       セット数 (s)
                     </label>
                     <input
+                      id={`${idBase}-sets`}
                       type="number"
                       inputMode="numeric"
                       min={1}
@@ -444,72 +496,85 @@ export const MenuEditorPage: React.FC = () => {
                       onChange={(e) =>
                         updateRow(index, { sets: Math.max(1, Number(e.target.value)) })
                       }
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                        サークル
-                      </label>
-                      <input
-                        type="text"
-                        value={row.circle}
-                        onChange={(e) => updateRow(index, { circle: e.target.value })}
-                        placeholder="1:30"
-                        className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                        HR
-                      </label>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={0}
-                        value={row.hr ?? ''}
-                        onChange={(e) =>
-                          updateRow(index, {
-                            hr: e.target.value ? Number(e.target.value) : null,
-                          })
-                        }
-                        placeholder="160"
-                        className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
-                      />
-                    </div>
+                  <div>
+                    <label
+                      htmlFor={`${idBase}-circle`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
+                      サークル
+                    </label>
+                    <input
+                      id={`${idBase}-circle`}
+                      type="text"
+                      value={row.circle}
+                      onChange={(e) => updateRow(index, { circle: e.target.value })}
+                      placeholder="1:30"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor={`${idBase}-hr`}
+                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                    >
+                      目標心拍 (HR)
+                    </label>
+                    <input
+                      id={`${idBase}-hr`}
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      value={row.hr ?? ''}
+                      onChange={(e) =>
+                        updateRow(index, {
+                          hr: e.target.value ? Number(e.target.value) : null,
+                        })
+                      }
+                      placeholder="160"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                    />
                   </div>
                 </div>
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                  <label
+                    htmlFor={`${idBase}-instruction`}
+                    className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                  >
                     {row.is_group_header ? 'ブロック見出し' : '詳細指示'}
                   </label>
                   <input
+                    id={`${idBase}-instruction`}
                     type="text"
                     value={row.instruction}
                     onChange={(e) => updateRow(index, { instruction: e.target.value })}
                     placeholder={
-                      row.is_group_header
-                        ? '例: Main Set（ピラミッド）'
-                        : '例: 後半ビルドアップ、ターン後5mドルフィン'
+                      row.is_group_header ? '例: Main Set' : '例: 後半ビルドアップ'
                     }
-                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                    自由記述
+                  <label
+                    htmlFor={`${idBase}-free-text`}
+                    className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                  >
+                    メモ
                   </label>
                   <input
+                    id={`${idBase}-free-text`}
                     type="text"
                     value={row.free_text}
                     onChange={(e) => updateRow(index, { free_text: e.target.value })}
-                    placeholder="補足メモ（自由記述）"
-                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    placeholder="補足メモ（任意）"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                   />
                 </div>
               </div>
@@ -521,7 +586,7 @@ export const MenuEditorPage: React.FC = () => {
           type="button"
           onClick={addRow}
           disabled={rows.length >= MAX_MENU_ROWS}
-          className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+          className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white text-sm font-semibold text-[#0b1f3a] hover:bg-slate-50 disabled:opacity-40 dark:border-slate-700 dark:bg-[#0e1b2e] dark:text-slate-200 dark:hover:bg-slate-800"
         >
           <Plus className="h-4 w-4" />
           <span>メニュー行を追加</span>
@@ -529,15 +594,15 @@ export const MenuEditorPage: React.FC = () => {
       </section>
 
       {/* Bottom Save Bar */}
-      <section className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-        <label className="inline-flex items-center gap-2.5 text-sm font-medium text-slate-800 dark:text-slate-200 min-h-[44px]">
+      <section className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e]">
+        <label className="inline-flex items-center gap-2.5 text-sm font-medium text-[#0b1f3a] dark:text-slate-200 min-h-[44px] cursor-pointer">
           <input
             type="checkbox"
             checked={shareAfter}
             onChange={(e) => setShareAfter(e.target.checked)}
-            className="h-5 w-5 rounded border-slate-300 text-sky-600"
+            className="h-5 w-5 rounded border-slate-300 text-[#0077b6]"
           />
-          <span>保存後に選手へ共有する（共有中に設定）</span>
+          <span>保存後に選手へ共有する</span>
         </label>
 
         <div className="flex items-center gap-3">
@@ -551,7 +616,7 @@ export const MenuEditorPage: React.FC = () => {
           <button
             type="submit"
             disabled={submitting || !validation.valid}
-            className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-sky-600 px-6 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+            className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#0077b6] px-6 text-sm font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
           >
             <Save className="h-4 w-4" />
             <span>{submitting ? '保存中...' : isRevisionMode ? '新バージョンを保存' : 'メニューを保存'}</span>

@@ -231,7 +231,7 @@ export async function runSyncForAccount(params: {
 
     try {
       if (rawItem.table_name === 'menus' && rawItem.operation === 'insert') {
-        if (role !== 'coach') throw new Error('RLS違反: メニュー作成はコーチのみ可能です。');
+        if (role !== 'coach') throw new Error('メニュー作成はコーチアカウントのみ操作できます。');
         const created = await insertMenuOnServer(client, {
           id: rawItem.client_temp_id,
         });
@@ -241,7 +241,7 @@ export async function runSyncForAccount(params: {
           menus: replaceOrAppendById(workingDataset.menus, created),
         };
       } else if (rawItem.table_name === 'menus' && rawItem.operation === 'update') {
-        if (role !== 'coach') throw new Error('RLS違反: メニュー更新はコーチのみ可能です。');
+        if (role !== 'coach') throw new Error('メニュー更新はコーチアカウントのみ操作できます。');
         const updated = await updateMenuStatusOnServer(client, resolvedTargetId, {
           is_shared:
             typeof payload.is_shared === 'boolean' ? payload.is_shared : undefined,
@@ -253,7 +253,7 @@ export async function runSyncForAccount(params: {
           menus: replaceOrAppendById(workingDataset.menus, updated),
         };
       } else if (rawItem.table_name === 'menu_versions' && rawItem.operation === 'insert') {
-        if (role !== 'coach') throw new Error('RLS違反: バージョン作成はコーチのみ可能です。');
+        if (role !== 'coach') throw new Error('バージョン作成はコーチアカウントのみ操作できます。');
         const created = await insertMenuVersionOnServer(client, {
           id: rawItem.client_temp_id,
           menu_id: String(payload.menu_id),
@@ -270,7 +270,7 @@ export async function runSyncForAccount(params: {
         rawItem.table_name === 'menu_versions' &&
         rawItem.operation === 'revise_menu_version'
       ) {
-        if (role !== 'coach') throw new Error('RLS違反: メニュー改訂はコーチのみ可能です。');
+        if (role !== 'coach') throw new Error('メニュー改訂はコーチアカウントのみ操作できます。');
         const res = await reviseMenuVersionOnServer(client, {
           menu_id: String(payload.menu_id),
           version_id: rawItem.client_temp_id,
@@ -285,7 +285,7 @@ export async function runSyncForAccount(params: {
           menu_versions: replaceOrAppendById(workingDataset.menu_versions, res.version),
         };
       } else if (rawItem.table_name === 'practice_days' && rawItem.operation === 'insert') {
-        if (role !== 'athlete') throw new Error('RLS違反: 練習日の新規作成は選手のみ可能です。');
+        if (role !== 'athlete') throw new Error('練習日の新規作成は選手アカウントのみ操作できます。');
         const created = await insertPracticeDayOnServer(client, {
           id: rawItem.client_temp_id,
           athlete_id: userId,
@@ -314,7 +314,7 @@ export async function runSyncForAccount(params: {
           practice_days: replaceOrAppendById(workingDataset.practice_days, updated),
         };
       } else if (rawItem.table_name === 'practice_entries' && rawItem.operation === 'insert') {
-        if (role !== 'athlete') throw new Error('RLS違反: 実施記録の新規作成は選手のみ可能です。');
+        if (role !== 'athlete') throw new Error('実施記録の新規作成は選手アカウントのみ操作できます。');
         const created = await insertPracticeEntryOnServer(client, {
           id: rawItem.client_temp_id,
           day_id: String(payload.day_id),
@@ -356,7 +356,7 @@ export async function runSyncForAccount(params: {
           practice_entries: replaceOrAppendById(workingDataset.practice_entries, updated),
         };
       } else if (rawItem.table_name === 'set_results' && rawItem.operation === 'insert') {
-        if (role !== 'athlete') throw new Error('RLS違反: セット結果の新規作成は選手のみ可能です。');
+        if (role !== 'athlete') throw new Error('セット結果の新規作成は選手アカウントのみ操作できます。');
         const created = await insertSetResultOnServer(client, {
           id: rawItem.client_temp_id,
           entry_id: String(payload.entry_id),
@@ -396,7 +396,7 @@ export async function runSyncForAccount(params: {
           set_results: replaceOrAppendById(workingDataset.set_results, updated),
         };
       } else if (rawItem.table_name === 'coach_comments' && rawItem.operation === 'insert') {
-        if (role !== 'coach') throw new Error('RLS違反: コメント投稿はコーチのみ可能です。');
+        if (role !== 'coach') throw new Error('コメント投稿はコーチアカウントのみ操作できます。');
         const created = await insertCoachCommentOnServer(client, {
           id: rawItem.client_temp_id,
           entry_id: String(payload.entry_id),

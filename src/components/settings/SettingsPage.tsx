@@ -13,7 +13,6 @@ import {
 import { useAuth } from '../../hooks/useAuth';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { useSwimData } from '../../hooks/useSwimData';
-import { useTheme, type ThemePreference } from '../../hooks/useTheme';
 import type { AccountSlot, OutboxItem, SwimlogBackupBundle } from '../../types/domain';
 import {
   DISPLAY_NAME_MAX_LENGTH,
@@ -24,10 +23,66 @@ import { createUuid } from '../../utils/swimCalculations';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 import { ConflictResolverModal } from '../sync/ConflictResolverModal';
 
+function formatOutboxTableLabel(tableName: OutboxItem['table_name']): string {
+  switch (tableName) {
+    case 'practice_days':
+      return '練習日のメモ';
+    case 'practice_entries':
+      return 'メニュー全体の記録';
+    case 'set_results':
+      return 'セットごとの記録';
+    case 'menus':
+      return '練習メニュー';
+    case 'menu_versions':
+      return 'メニュー内容';
+    case 'coach_comments':
+      return 'コーチコメント';
+    default:
+      return '練習データ';
+  }
+}
+
+function formatOutboxOpLabel(op: OutboxItem['operation']): string {
+  switch (op) {
+    case 'insert':
+      return '新規登録';
+    case 'update':
+      return '更新';
+    case 'revise_menu_version':
+      return '改訂版作成';
+    default:
+      return '変更';
+  }
+}
+
+function formatOutboxStatusLabel(status: OutboxItem['status']): string {
+  switch (status) {
+    case 'pending':
+      return '送信待ち';
+    case 'syncing':
+      return '送信中';
+    case 'conflict':
+      return '競合（要確認）';
+    case 'error':
+      return '送信エラー';
+    default:
+      return '保留中';
+  }
+}
+
+function formatAccountCardName(displayName: string | null | undefined, slot: AccountSlot): string {
+  const clean = normalizeDisplayName(displayName ?? '');
+  if (!clean) return '表示名が未設定です';
+  const roleLabel = slot === 'coach' ? 'コーチ' : '選手';
+  if (clean.includes(`(${roleLabel})`) || clean.includes(`（${roleLabel}）`)) {
+    return clean;
+  }
+  return `${clean}（${roleLabel}）`;
+}
+
 export const SettingsPage: React.FC = () => {
   const { activeSlot, session, slotMetas, switchSlot, signOutSlot } = useAuth();
   const isOnline = useOnlineStatus();
-  const { preference, setPreference } = useTheme();
   const {
     outbox,
     allOutboxCounts,
@@ -119,10 +174,10 @@ export const SettingsPage: React.FC = () => {
         .slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      setBackupMessage('バックアップJSONをダウンロードしました。');
+      setBackupMessage('バックアップファイルを保存しました。');
     } catch (err) {
       setBackupMessage(
-        err instanceof Error ? err.message : 'バックアップ書き出しに失敗しました。'
+        err instanceof Error ? err.message : 'バックアップの保存に失敗しました。'
       );
     }
   };
@@ -136,7 +191,7 @@ export const SettingsPage: React.FC = () => {
       const bundle = JSON.parse(text) as SwimlogBackupBundle;
       const res = await importJsonBackup(bundle);
       setBackupMessage(
-        `バックアップを復元しました（未送信キュー ${res.importedOutboxCount}件復元）。`
+        `バックアップを復元しました（未送信データ ${res.importedOutboxCount}件）。`
       );
     } catch (err) {
       setBackupMessage(err instanceof Error ? err.message : '復元に失敗しました。');
@@ -148,22 +203,22 @@ export const SettingsPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-50">
-          設定・アカウント・同期管理
+        <h1 className="text-xl font-bold text-[#0b1f3a] dark:text-slate-50">
+          設定
         </h1>
         <PWAInstallButton />
       </div>
 
-      {/* Self-service Profile Display Name */}
+      {/* Display Name Settings */}
       {session && (
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-                プロフィール表示名（{session.role === 'coach' ? 'コーチ' : '選手'}）
+              <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+                表示名の変更（{session.role === 'coach' ? 'コーチ' : '選手'}）
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                ヘッダー・ホーム・コメント・変更履歴に表示される自分の名前を変更できます（1〜{DISPLAY_NAME_MAX_LENGTH}文字）。
+                アプリ内に表示される自分の名前を変更できます。
               </p>
             </div>
             <span className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
@@ -171,33 +226,41 @@ export const SettingsPage: React.FC = () => {
             </span>
           </div>
 
-          <form onSubmit={handleSaveDisplayName} className="flex flex-col sm:flex-row gap-2">
-            <input
-              type="text"
-              maxLength={60}
-              value={displayNameDraft}
-              onChange={(e) => {
-                setDisplayNameDraft(e.target.value);
-                if (profileSaveMessage) setProfileSaveMessage(null);
-                if (profileSaveError) setProfileSaveError(null);
-              }}
-              placeholder={session.role === 'coach' ? '例: 佐藤 コーチ' : '例: 田中 太郎'}
-              aria-label="プロフィール表示名"
-              className="flex-1 min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
-            />
-            <button
-              type="submit"
-              disabled={
-                !isOnline ||
-                isSyncing ||
-                isUpdatingProfile ||
-                normalizeDisplayName(displayNameDraft) === normalizeDisplayName(session.displayName)
-              }
-              className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-sky-600 px-4 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50 whitespace-nowrap"
+          <form onSubmit={handleSaveDisplayName} className="space-y-2">
+            <label
+              htmlFor="settings-display-name"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
             >
-              <Save className="h-4 w-4" />
-              <span>{isUpdatingProfile ? '更新中...' : '表示名を保存'}</span>
-            </button>
+              表示名（必須）
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                id="settings-display-name"
+                type="text"
+                maxLength={60}
+                value={displayNameDraft}
+                onChange={(e) => {
+                  setDisplayNameDraft(e.target.value);
+                  if (profileSaveMessage) setProfileSaveMessage(null);
+                  if (profileSaveError) setProfileSaveError(null);
+                }}
+                placeholder={session.role === 'coach' ? '例: 佐藤 コーチ' : '例: 田中 太郎'}
+                className="flex-1 min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm text-[#0b1f3a] dark:border-slate-700 dark:bg-[#07111e] dark:text-slate-50"
+              />
+              <button
+                type="submit"
+                disabled={
+                  !isOnline ||
+                  isSyncing ||
+                  isUpdatingProfile ||
+                  normalizeDisplayName(displayNameDraft) === normalizeDisplayName(session.displayName)
+                }
+                className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc] whitespace-nowrap"
+              >
+                <Save className="h-4 w-4" />
+                <span>{isUpdatingProfile ? '更新中...' : '表示名を保存'}</span>
+              </button>
+            </div>
           </form>
 
           {!isOnline && (
@@ -220,13 +283,13 @@ export const SettingsPage: React.FC = () => {
       )}
 
       {/* 2-Account Slot Management */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
         <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-            2アカウント切替（独立セッション管理）
+          <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+            アカウントの切替
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            コーチ枠・選手枠はそれぞれ別の Supabase Auth 保存領域を持ち、切替時に他方のセッションや未送信データは上書き・削除されません。
+            コーチと選手を同じ端末で切り替えられます。切り替え後も下書きや未送信データは保持されます。
           </p>
         </div>
 
@@ -240,28 +303,26 @@ export const SettingsPage: React.FC = () => {
                 key={slot}
                 className={`rounded-2xl border p-4 space-y-3 ${
                   isCurrent
-                    ? 'border-sky-600 bg-sky-50/70 dark:border-sky-400 dark:bg-sky-950/30'
-                    : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40'
+                    ? 'border-[#0077b6] bg-[#0077b6]/5 dark:border-[#38bdf8] dark:bg-[#38bdf8]/10'
+                    : 'border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-[#07111e]/50'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold text-slate-900 dark:text-slate-50">
-                    {slot === 'coach' ? 'コーチ枠（コーチ）' : '選手枠（選手）'}
+                  <span className="text-sm font-bold text-[#0b1f3a] dark:text-slate-50">
+                    {slot === 'coach' ? 'コーチ' : '選手'}
                   </span>
-                  <span className="font-mono-num text-xs text-slate-500">
+                  <span className="font-mono-num text-xs font-medium text-slate-500 dark:text-slate-400">
                     {isCurrent ? '使用中' : meta ? '待機中' : '未ログイン'}
                   </span>
                 </div>
                 <div className="text-xs text-slate-600 dark:text-slate-300">
                   {meta
-                    ? meta.displayName
-                      ? `${meta.displayName}（${slot === 'coach' ? 'コーチ' : '選手'}）`
-                      : `表示名が未設定です（${slot === 'coach' ? 'コーチ' : '選手'}）— プロフィール表示名を登録してください`
+                    ? formatAccountCardName(meta.displayName, slot)
                     : 'サインインしていません'}
                 </div>
                 {queued > 0 && (
                   <div className="font-mono-num text-xs font-semibold text-amber-700 dark:text-amber-300">
-                    未送信キュー: {queued}件
+                    未送信データ: {queued}件
                   </div>
                 )}
 
@@ -271,7 +332,7 @@ export const SettingsPage: React.FC = () => {
                       type="button"
                       disabled={isUpdatingProfile}
                       onClick={() => void switchSlot(slot)}
-                      className="min-h-[44px] rounded-xl bg-sky-600 px-3.5 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                      className="min-h-[44px] rounded-xl bg-[#0077b6] px-3.5 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a]"
                     >
                       {meta ? 'この枠へ切替' : 'この枠でログイン'}
                     </button>
@@ -281,10 +342,10 @@ export const SettingsPage: React.FC = () => {
                       type="button"
                       disabled={isUpdatingProfile}
                       onClick={() => void signOutSlot(slot)}
-                      className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                      className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-[#0e1b2e] dark:text-slate-200"
                     >
                       <LogOut className="h-3.5 w-3.5" />
-                      <span>この枠のみサインアウト</span>
+                      <span>サインアウト</span>
                     </button>
                   )}
                 </div>
@@ -294,12 +355,12 @@ export const SettingsPage: React.FC = () => {
         </div>
       </section>
 
-      {/* Outbox Queue & Manual Sync */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      {/* Sync Status & Pending Queue */}
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-              未送信データ・同期キュー（{session?.displayName || (session?.role === 'coach' ? '表示名未設定・コーチ' : '表示名未設定・選手')}）
+            <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+              データの同期状況
             </h2>
             {lastSyncMessage && (
               <p className="text-xs text-slate-500 dark:text-slate-400">{lastSyncMessage}</p>
@@ -309,10 +370,10 @@ export const SettingsPage: React.FC = () => {
             type="button"
             disabled={isSyncing || !isOnline}
             onClick={() => void syncNow()}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-sky-600 px-4 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
           >
             <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>手動同期を実行</span>
+            <span>今すぐ同期する</span>
           </button>
         </div>
 
@@ -328,8 +389,9 @@ export const SettingsPage: React.FC = () => {
                 className="py-3 flex flex-wrap items-center justify-between gap-2 text-xs"
               >
                 <div className="space-y-0.5">
-                  <div className="font-mono-num font-bold text-slate-900 dark:text-slate-100">
-                    {item.table_name} · {item.operation} · 状態: {item.status}
+                  <div className="font-bold text-[#0b1f3a] dark:text-slate-100">
+                    {formatOutboxTableLabel(item.table_name)} · {formatOutboxOpLabel(item.operation)} ·{' '}
+                    {formatOutboxStatusLabel(item.status)}
                   </div>
                   {item.last_error && (
                     <div className="text-rose-600 dark:text-rose-400">{item.last_error}</div>
@@ -340,17 +402,17 @@ export const SettingsPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setSelectedConflict(item)}
-                      className="inline-flex min-h-[40px] items-center gap-1 rounded-xl bg-rose-600 px-3 font-semibold text-white"
+                      className="inline-flex min-h-[44px] items-center gap-1 rounded-xl bg-rose-600 px-3.5 font-semibold text-white"
                     >
                       <AlertTriangle className="h-3.5 w-3.5" />
-                      <span>競合解決</span>
+                      <span>競合を解決</span>
                     </button>
                   )}
                   {item.status === 'error' && (
                     <button
                       type="button"
                       onClick={() => void retryErroredItem(item)}
-                      className="min-h-[40px] rounded-xl border border-slate-300 px-3 font-semibold"
+                      className="min-h-[44px] rounded-xl border border-slate-300 px-3.5 font-semibold dark:border-slate-700"
                     >
                       再試行
                     </button>
@@ -358,8 +420,8 @@ export const SettingsPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => void discardOutboxItem(item.queue_id)}
-                    aria-label="キュー項目を破棄"
-                    className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:text-rose-600"
+                    aria-label="未送信データを削除"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800"
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -370,108 +432,107 @@ export const SettingsPage: React.FC = () => {
         )}
       </section>
 
-      {/* Theme & Local Backup */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-3">
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-            画面テーマ（プールサイド高コントラスト対応）
-          </h2>
-          <div className="grid grid-cols-3 gap-2">
-            {(
-              [
-                { id: 'light', label: 'ライト（推奨）' },
-                { id: 'dark', label: 'ダーク' },
-                { id: 'system', label: '端末連動' },
-              ] as Array<{ id: ThemePreference; label: string }>
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => setPreference(opt.id)}
-                className={`min-h-[44px] rounded-xl border text-xs font-semibold transition ${
-                  preference === opt.id
-                    ? 'border-sky-600 bg-sky-50 text-sky-900 dark:border-sky-400 dark:bg-sky-950/40 dark:text-sky-100'
-                    : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-3">
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-            未送信データ退避・復元（JSON）
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            iOS のストレージ自動削除に備え、このアカウントの未送信キューとキャッシュをファイル退避できます。
-          </p>
-          {backupMessage && (
-            <p className="text-xs font-semibold text-sky-700 dark:text-sky-300">
-              {backupMessage}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void handleExportBackup()}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-3.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-100"
-            >
-              <Download className="h-4 w-4" />
-              <span>JSON 書き出し</span>
-            </button>
-            <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-xl border border-slate-300 px-3.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-100">
-              <Upload className="h-4 w-4" />
-              <span>JSON 読み込み</span>
-              <input
-                type="file"
-                accept="application/json"
-                onChange={handleImportBackup}
-                className="hidden"
-              />
-            </label>
-          </div>
-        </section>
-      </div>
-
-      {/* Local Competition Countdown Manager */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+      {/* Data Backup & Restore */}
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3">
         <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-slate-50">
-            大会カウントダウン管理（端末ローカル保存）
+          <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+            データのバックアップ・復元
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            既存DBを変更せず、端末内の IndexedDB に大会日程を保存します（JSONバックアップに含まれます）。
+            未送信の記録や大会予定をファイルに保存し、必要なときに復元できます。
+          </p>
+        </div>
+        {backupMessage && (
+          <p className="text-xs font-semibold text-[#0077b6] dark:text-[#38bdf8]">
+            {backupMessage}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void handleExportBackup()}
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-4 text-xs font-semibold text-[#0b1f3a] hover:bg-slate-100 dark:border-slate-700 dark:text-slate-100 dark:hover:bg-slate-800"
+          >
+            <Download className="h-4 w-4" />
+            <span>バックアップを保存</span>
+          </button>
+          <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-1.5 rounded-xl border border-slate-300 px-4 text-xs font-semibold text-[#0b1f3a] hover:bg-slate-100 dark:border-slate-700 dark:text-slate-100 dark:hover:bg-slate-800">
+            <Upload className="h-4 w-4" />
+            <span>バックアップから復元</span>
+            <input
+              type="file"
+              accept="application/json"
+              onChange={handleImportBackup}
+              className="hidden"
+            />
+          </label>
+        </div>
+      </section>
+
+      {/* Competition Countdown */}
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4">
+        <div>
+          <h2 className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+            大会カウントダウン
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            ホームと分析画面に表示する大会日程を登録できます。
           </p>
         </div>
 
-        <form onSubmit={handleAddCompetition} className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-          <input
-            type="text"
-            required
-            value={compName}
-            onChange={(e) => setCompName(e.target.value)}
-            placeholder="大会名"
-            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-          />
-          <input
-            type="date"
-            required
-            value={compDate}
-            onChange={(e) => setCompDate(e.target.value)}
-            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
-          />
-          <input
-            type="text"
-            value={compNote}
-            onChange={(e) => setCompNote(e.target.value)}
-            placeholder="目標メモ（任意）"
-            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
-          />
+        <form onSubmit={handleAddCompetition} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+          <div>
+            <label
+              htmlFor="comp-name-input"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
+              大会名（必須）
+            </label>
+            <input
+              id="comp-name-input"
+              type="text"
+              required
+              value={compName}
+              onChange={(e) => setCompName(e.target.value)}
+              placeholder="例: 冬季チャンピオンシップ"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="comp-date-input"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
+              大会開催日（必須）
+            </label>
+            <input
+              id="comp-date-input"
+              type="date"
+              required
+              value={compDate}
+              onChange={(e) => setCompDate(e.target.value)}
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="comp-note-input"
+              className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+            >
+              目標メモ（任意）
+            </label>
+            <input
+              id="comp-note-input"
+              type="text"
+              value={compNote}
+              onChange={(e) => setCompNote(e.target.value)}
+              placeholder="例: 100m Fr ベスト更新"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+            />
+          </div>
           <button
             type="submit"
-            className="inline-flex min-h-[44px] items-center justify-center gap-1 rounded-xl bg-sky-600 px-4 text-xs font-semibold text-white hover:bg-sky-700"
+            className="inline-flex min-h-[44px] items-center justify-center gap-1 rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
           >
             <Plus className="h-4 w-4" />
             <span>追加</span>
@@ -483,8 +544,8 @@ export const SettingsPage: React.FC = () => {
             {competitions.map((c) => (
               <div key={c.id} className="py-2 flex items-center justify-between gap-2">
                 <div>
-                  <span className="font-semibold">{c.name}</span>{' '}
-                  <span className="font-mono-num text-xs text-slate-500">
+                  <span className="font-semibold text-[#0b1f3a] dark:text-slate-100">{c.name}</span>{' '}
+                  <span className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
                     ({c.event_date})
                   </span>
                 </div>
@@ -492,7 +553,7 @@ export const SettingsPage: React.FC = () => {
                   type="button"
                   onClick={() => void handleRemoveCompetition(c.id)}
                   aria-label="大会を削除"
-                  className="min-h-[40px] min-w-[40px] flex items-center justify-center text-slate-400 hover:text-rose-600"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>

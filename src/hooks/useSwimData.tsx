@@ -697,7 +697,7 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const createPracticeDay = useCallback(
     async ({ practice_date, note }: { practice_date: string; note: string }) => {
       if (!session || session.role !== 'athlete') {
-        throw new Error('練習日の新規作成は選手アカウントのみ実行できます（RLS制約）。');
+        throw new Error('練習日の新規作成は選手アカウントのみ操作できます。');
       }
       const id = createUuid();
       const now = new Date().toISOString();
@@ -733,7 +733,7 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       impression: string;
     }) => {
       if (!session || session.role !== 'athlete') {
-        throw new Error('実施メニュー記録の新規作成は選手アカウントのみ実行できます（RLS制約）。');
+        throw new Error('実施メニュー記録の新規作成は選手アカウントのみ操作できます。');
       }
       const id = createUuid();
       const now = new Date().toISOString();
@@ -769,7 +769,7 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       impression: string;
     }) => {
       if (!session || session.role !== 'athlete') {
-        throw new Error('セット結果の新規作成は選手アカウントのみ実行できます（RLS制約）。');
+        throw new Error('セット結果の新規作成は選手アカウントのみ操作できます。');
       }
       const id = createUuid();
       const now = new Date().toISOString();
@@ -814,7 +814,7 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }>;
     }) => {
       if (!session || session.role !== 'athlete') {
-        throw new Error('練習記録の新規作成は選手アカウントのみ実行できます（RLS制約）。');
+        throw new Error('練習記録の新規作成は選手アカウントのみ操作できます。');
       }
       const now = new Date().toISOString();
       const batch: OutboxItem[] = [];

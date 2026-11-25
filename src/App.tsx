@@ -24,7 +24,7 @@ const AuthenticatedApp: React.FC = () => {
 
   if (isLoading && !session) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+      <div className="min-h-screen flex items-center justify-center bg-[#f4f7fb] text-sm text-[#0b1f3a] dark:bg-[#07111e] dark:text-slate-200">
         認証状態とオフラインデータを確認中...
       </div>
     );

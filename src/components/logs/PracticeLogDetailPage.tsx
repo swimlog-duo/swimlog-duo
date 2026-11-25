@@ -12,6 +12,74 @@ import {
 } from '../../utils/swimCalculations';
 import { normalizeDisplayName } from '../../utils/displayName';
 
+function formatHistoryTableLabel(tableName: string): string {
+  switch (tableName) {
+    case 'practice_days':
+      return '練習日のメモ';
+    case 'practice_entries':
+      return 'メニュー全体の記録';
+    case 'set_results':
+      return 'セットごとの記録';
+    default:
+      return '練習記録';
+  }
+}
+
+function formatOldDataSummary(
+  tableName: string,
+  oldData: Record<string, unknown> | null | undefined
+): string {
+  if (!oldData || typeof oldData !== 'object') return '変更前の内容あり';
+  const parts: string[] = [];
+
+  if (tableName === 'practice_days') {
+    if (typeof oldData.practice_date === 'string' && oldData.practice_date) {
+      parts.push(`日付: ${oldData.practice_date}`);
+    }
+    if ('note' in oldData) {
+      const noteText = typeof oldData.note === 'string' ? oldData.note.trim() : '';
+      parts.push(`メモ: ${noteText || '（なし）'}`);
+    }
+  } else if (tableName === 'practice_entries') {
+    if (typeof oldData.total_time_ms === 'number') {
+      parts.push(`合計時間: ${formatTimeMs(oldData.total_time_ms)}`);
+    }
+    if (typeof oldData.rating === 'number') {
+      parts.push(`評価: ${oldData.rating}/5`);
+    }
+    if ('impression' in oldData) {
+      const imp = typeof oldData.impression === 'string' ? oldData.impression.trim() : '';
+      parts.push(`感想: ${imp || '（なし）'}`);
+    }
+  } else if (tableName === 'set_results') {
+    if (typeof oldData.time_ms === 'number') {
+      parts.push(`タイム: ${formatTimeMs(oldData.time_ms)}`);
+    }
+    if (Array.isArray(oldData.splits) && oldData.splits.length > 0) {
+      const formattedSplits = oldData.splits
+        .map((sp) => {
+          if (sp && typeof sp === 'object' && 'time_ms' in sp) {
+            const ms = (sp as { time_ms?: unknown }).time_ms;
+            return typeof ms === 'number' ? formatTimeMs(ms) : '';
+          }
+          return '';
+        })
+        .filter(Boolean);
+      if (formattedSplits.length > 0) {
+        parts.push(`ラップ: ${formattedSplits.join(' / ')}`);
+      }
+    }
+    if (typeof oldData.rating === 'number') {
+      parts.push(`評価: ${oldData.rating}/5`);
+    }
+    if (typeof oldData.impression === 'string' && oldData.impression.trim()) {
+      parts.push(`メモ: ${oldData.impression.trim()}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join(' · ') : '変更前の記録';
+}
+
 export const PracticeLogDetailPage: React.FC = () => {
   const { dayId } = useParams<{ dayId: string }>();
   const { session } = useAuth();
@@ -43,10 +111,13 @@ export const PracticeLogDetailPage: React.FC = () => {
   const profileNameMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of dataset.profiles) {
-      map.set(
-        p.id,
-        `${normalizeDisplayName(p.display_name ?? '') || '表示名未設定'} (${p.role === 'coach' ? 'コーチ' : '選手'})`
-      );
+      const clean = normalizeDisplayName(p.display_name ?? '') || '表示名未設定';
+      const roleLabel = p.role === 'coach' ? 'コーチ' : '選手';
+      const formatted =
+        clean.includes(`(${roleLabel})`) || clean.includes(`（${roleLabel}）`)
+          ? clean
+          : `${clean}（${roleLabel}）`;
+      map.set(p.id, formatted);
     }
     return map;
   }, [dataset.profiles]);
@@ -80,7 +151,7 @@ export const PracticeLogDetailPage: React.FC = () => {
 
   if (!day) {
     return (
-      <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+      <div className="rounded-2xl border border-slate-200/80 bg-white p-8 text-center text-sm text-slate-600 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] dark:text-slate-300">
         練習日の記録が見つかりません。
       </div>
     );
@@ -266,14 +337,14 @@ export const PracticeLogDetailPage: React.FC = () => {
       )}
 
       {/* Day Header */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3">
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h1 className="font-mono-num text-2xl font-bold text-slate-900 dark:text-slate-50">
+            <h1 className="font-mono-num text-2xl font-bold text-[#0b1f3a] dark:text-slate-50">
               {day.practice_date}
             </h1>
             <p className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
-              rev.{day.revision} · 最終更新 {day.updated_at.slice(0, 16).replace('T', ' ')}
+              最終更新 {day.updated_at.slice(0, 16).replace('T', ' ')}
             </p>
           </div>
 
@@ -281,7 +352,7 @@ export const PracticeLogDetailPage: React.FC = () => {
             {isAthlete && (
               <Link
                 to={`/logs/new?dayId=${day.id}`}
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-sky-600 px-3.5 text-xs font-semibold text-white hover:bg-sky-700"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-[#0077b6] px-3.5 text-xs font-semibold text-white hover:bg-[#005f92] dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc] whitespace-nowrap"
               >
                 <Plus className="h-4 w-4" />
                 <span>この日にメニュー追加</span>
@@ -293,7 +364,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                 setDayNoteDraft(day.note ?? '');
                 setEditingDayNote(true);
               }}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 whitespace-nowrap"
             >
               <Edit2 className="h-3.5 w-3.5" />
               <span>日次メモ編集</span>
@@ -303,32 +374,37 @@ export const PracticeLogDetailPage: React.FC = () => {
 
         {editingDayNote ? (
           <div className="space-y-2">
+            <label htmlFor="day-note-edit" className="sr-only">
+              その日のメモ
+            </label>
             <textarea
+              id="day-note-edit"
               rows={2}
               value={dayNoteDraft}
               onChange={(e) => setDayNoteDraft(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-[#07111e]"
             />
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setEditingDayNote(false)}
-                className="min-h-[40px] rounded-xl border border-slate-300 px-3 text-xs font-semibold"
+                className="min-h-[44px] rounded-xl border border-slate-300 px-3.5 text-xs font-semibold dark:border-slate-700"
               >
                 キャンセル
               </button>
               <button
                 type="button"
+                disabled={saving}
                 onClick={() => void handleSaveDayNote()}
-                className="min-h-[40px] rounded-xl bg-sky-600 px-4 text-xs font-semibold text-white"
+                className="min-h-[44px] rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a]"
               >
-                保存 (expected_revision: {day.revision})
+                メモを保存
               </button>
             </div>
           </div>
         ) : (
           <p className="text-sm text-slate-700 dark:text-slate-300">
-            {day.note || '日次メモなし'}
+            {day.note || 'その日のメモはありません'}
           </p>
         )}
       </section>
@@ -347,11 +423,11 @@ export const PracticeLogDetailPage: React.FC = () => {
         return (
           <section
             key={entry.id}
-            className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-4"
+            className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-4"
           >
             <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
               <div>
-                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-50">
+                <h2 className="text-lg font-bold text-[#0b1f3a] dark:text-slate-50">
                   {ver?.title ?? '実施メニュー'}{' '}
                   <span className="font-mono-num text-sm text-slate-500">
                     (v{ver?.version_no ?? '?'})
@@ -363,14 +439,13 @@ export const PracticeLogDetailPage: React.FC = () => {
                     <span>· 合計 {formatTimeMs(entry.total_time_ms)}</span>
                   )}
                   {entry.rating != null && <span>· 評価 {entry.rating}/5</span>}
-                  <span>· rev.{entry.revision}</span>
                 </div>
               </div>
 
               <button
                 type="button"
                 onClick={() => openEntryEdit(entry)}
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 whitespace-nowrap"
               >
                 <Edit2 className="h-3.5 w-3.5" />
                 <span>全体記録を編集</span>
@@ -378,9 +453,9 @@ export const PracticeLogDetailPage: React.FC = () => {
             </div>
 
             {entry.impression && (
-              <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-800 dark:bg-slate-950/60 dark:text-slate-200">
+              <div className="rounded-xl bg-slate-50 p-3.5 text-sm text-slate-800 dark:bg-[#07111e]/70 dark:text-slate-200">
                 <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 mr-2">
-                  選手感想:
+                  選手の感想:
                 </span>
                 {entry.impression}
               </div>
@@ -398,7 +473,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                       className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
                     >
                       <div>
-                        <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        <div className="text-sm font-semibold text-[#0b1f3a] dark:text-slate-100">
                           <span className="font-mono-num">
                             {row.distance_m}m×{row.reps}×{row.sets}
                           </span>{' '}
@@ -406,13 +481,12 @@ export const PracticeLogDetailPage: React.FC = () => {
                         </div>
                         {sr ? (
                           <div className="mt-1 space-y-0.5 text-xs text-slate-600 dark:text-slate-300">
-                            <div className="font-mono-num font-bold text-sky-700 dark:text-sky-300">
+                            <div className="font-mono-num font-bold text-[#0077b6] dark:text-[#38bdf8]">
                               タイム: {formatTimeMs(sr.time_ms)}
-                              {sr.rating != null ? ` · 評価 ${sr.rating}/5` : ''} · rev.
-                              {sr.revision}
+                              {sr.rating != null ? ` · 評価 ${sr.rating}/5` : ''}
                             </div>
                             {sr.splits?.length > 0 && (
-                              <div className="font-mono-num text-slate-500">
+                              <div className="font-mono-num text-slate-500 dark:text-slate-400">
                                 ラップ:{' '}
                                 {sr.splits
                                   .map((sp) => `#${sp.rep} ${formatTimeMs(sp.time_ms)}`)
@@ -430,7 +504,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => openSetEdit(sr)}
-                          className="inline-flex min-h-[40px] items-center gap-1 rounded-xl border border-slate-200 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 self-start sm:self-center"
+                          className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-slate-200 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 self-start sm:self-center whitespace-nowrap"
                         >
                           <Edit2 className="h-3.5 w-3.5" />
                           <span>編集</span>
@@ -446,7 +520,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                                 `${row.distance_m}m×${row.reps}×${row.sets} ${row.stroke}`
                               )
                             }
-                            className="inline-flex min-h-[40px] items-center gap-1 rounded-xl border border-sky-300 bg-sky-50 px-3 text-xs font-semibold text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200 self-start sm:self-center"
+                            className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-[#0077b6]/30 bg-[#0077b6]/10 px-3.5 text-xs font-semibold text-[#0b1f3a] hover:bg-[#0077b6]/15 dark:border-[#38bdf8]/40 dark:bg-[#38bdf8]/15 dark:text-sky-200 self-start sm:self-center whitespace-nowrap"
                           >
                             <Plus className="h-3.5 w-3.5" />
                             <span>記録追加</span>
@@ -458,12 +532,12 @@ export const PracticeLogDetailPage: React.FC = () => {
                 })}
             </div>
 
-            {/* Coach Comments (Read both, Write Coach Only) */}
+            {/* Coach Comments */}
             <div className="border-t border-slate-100 pt-4 dark:border-slate-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="flex items-center gap-1.5 text-sm font-bold text-slate-900 dark:text-slate-100">
-                  <MessageSquare className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-                  <span>コーチコメント（書き換え不可・追記専用）</span>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="flex items-center gap-1.5 text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+                  <MessageSquare className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8] shrink-0" />
+                  <span>コーチからのコメント</span>
                 </h3>
                 {isCoach && commentEntryId !== entry.id && (
                   <button
@@ -473,7 +547,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                       setCommentSetResultId('');
                       setCommentBody('');
                     }}
-                    className="min-h-[40px] rounded-xl bg-sky-600 px-3 text-xs font-semibold text-white hover:bg-sky-700"
+                    className="min-h-[44px] rounded-xl bg-[#0077b6] px-3.5 text-xs font-semibold text-white hover:bg-[#005f92] dark:bg-[#38bdf8] dark:text-[#0b1f3a] whitespace-nowrap shrink-0"
                   >
                     コメントを書く
                   </button>
@@ -496,7 +570,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                     return (
                       <div
                         key={c.id}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/60"
+                        className="rounded-xl border border-slate-200/80 bg-slate-50 p-3.5 text-sm dark:border-slate-800 dark:bg-[#07111e]/70"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
                           <span>
@@ -509,7 +583,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                             {c.created_at.slice(0, 16).replace('T', ' ')}
                           </span>
                         </div>
-                        <p className="mt-1 text-slate-900 dark:text-slate-100 whitespace-pre-wrap">
+                        <p className="mt-1 text-[#0b1f3a] dark:text-slate-100 whitespace-pre-wrap">
                           {c.body}
                         </p>
                       </div>
@@ -521,31 +595,41 @@ export const PracticeLogDetailPage: React.FC = () => {
               {isCoach && commentEntryId === entry.id && (
                 <div className="space-y-2">
                   {setResults.length > 0 && (
-                    <select
-                      value={commentSetResultId}
-                      onChange={(e) => setCommentSetResultId(e.target.value)}
-                      className="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-xs dark:border-slate-700 dark:bg-slate-950"
-                    >
-                      <option value="">メニュー全体へのコメント</option>
-                      {setResults.map((sr) => {
-                        const row = rows.find((r) => r.id === sr.row_id);
-                        return (
-                          <option key={sr.id} value={sr.id}>
-                            セット対象:{' '}
-                            {row
-                              ? `${row.distance_m}m×${row.reps} ${row.stroke}`
-                              : sr.row_id}
-                          </option>
-                        );
-                      })}
-                    </select>
+                    <div>
+                      <label htmlFor={`comment-target-${entry.id}`} className="sr-only">
+                        コメント対象セット
+                      </label>
+                      <select
+                        id={`comment-target-${entry.id}`}
+                        value={commentSetResultId}
+                        onChange={(e) => setCommentSetResultId(e.target.value)}
+                        className="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-xs dark:border-slate-700 dark:bg-[#07111e]"
+                      >
+                        <option value="">メニュー全体へのコメント</option>
+                        {setResults.map((sr) => {
+                          const row = rows.find((r) => r.id === sr.row_id);
+                          return (
+                            <option key={sr.id} value={sr.id}>
+                              セット対象:{' '}
+                              {row
+                                ? `${row.distance_m}m×${row.reps} ${row.stroke}`
+                                : 'セット記録'}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
                   )}
+                  <label htmlFor={`comment-body-${entry.id}`} className="sr-only">
+                    コメント本文
+                  </label>
                   <textarea
+                    id={`comment-body-${entry.id}`}
                     rows={3}
                     value={commentBody}
                     onChange={(e) => setCommentBody(e.target.value)}
-                    placeholder="選手へのフィードバックコメント（投稿後の編集・削除はできません）"
-                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                    placeholder="選手へのフィードバックコメント（投稿後の変更・削除はできません）"
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                   />
                   <div className="flex justify-end gap-2">
                     <button
@@ -555,7 +639,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                         setCommentEntryId('');
                         setCommentSetResultId('');
                       }}
-                      className="min-h-[40px] rounded-xl border border-slate-300 px-3 text-xs font-semibold"
+                      className="min-h-[44px] rounded-xl border border-slate-300 px-3.5 text-xs font-semibold dark:border-slate-700"
                     >
                       キャンセル
                     </button>
@@ -563,7 +647,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                       type="button"
                       disabled={saving || !commentBody.trim()}
                       onClick={() => void handleSubmitComment(entry.id)}
-                      className="min-h-[40px] rounded-xl bg-sky-600 px-4 text-xs font-semibold text-white disabled:opacity-50"
+                      className="min-h-[44px] rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a]"
                     >
                       {saving ? '送信中...' : 'コメントを投稿'}
                     </button>
@@ -576,10 +660,10 @@ export const PracticeLogDetailPage: React.FC = () => {
       })}
 
       {/* Record History Timeline */}
-      <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-3">
-        <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
-          <History className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-          <span>変更履歴（record_history）</span>
+      <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+          <History className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
+          <span>変更履歴</span>
         </h2>
         {relatedHistory.length === 0 ? (
           <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -590,17 +674,17 @@ export const PracticeLogDetailPage: React.FC = () => {
             {relatedHistory.map((h) => (
               <div key={h.id} className="py-2.5 space-y-1">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 font-mono-num">
-                    {h.table_name} · rev.{h.revision} ·{' '}
-                    {h.changed_by ? profileNameMap.get(h.changed_by) ?? h.changed_by : '不明'}
+                  <span className="font-semibold text-[#0b1f3a] dark:text-slate-200">
+                    {formatHistoryTableLabel(h.table_name)} ·{' '}
+                    {h.changed_by ? profileNameMap.get(h.changed_by) ?? '担当者' : '担当者'}
                   </span>
                   <span className="font-mono-num text-slate-500 dark:text-slate-400">
                     {h.changed_at.slice(0, 16).replace('T', ' ')}
                   </span>
                 </div>
-                <pre className="overflow-x-auto rounded-lg bg-slate-100 p-2 font-mono-num text-[11px] text-slate-700 dark:bg-slate-950 dark:text-slate-300">
-                  変更前: {JSON.stringify(h.old_data)}
-                </pre>
+                <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:bg-[#07111e] dark:text-slate-300">
+                  変更前: {formatOldDataSummary(h.table_name, h.old_data)}
+                </div>
               </div>
             ))}
           </div>
@@ -609,16 +693,22 @@ export const PracticeLogDetailPage: React.FC = () => {
 
       {/* Edit Entry Modal */}
       {editingEntry && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-entry-modal-title"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-[#0e1b2e] space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold">
-                実施記録の編集 (rev.{editingEntry.revision})
+              <h3 id="edit-entry-modal-title" className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+                実施記録の編集
               </h3>
               <button
                 type="button"
+                aria-label="閉じる"
                 onClick={() => setEditingEntry(null)}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -630,21 +720,27 @@ export const PracticeLogDetailPage: React.FC = () => {
             )}
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold">合計時間</label>
+                <label htmlFor="edit-entry-time" className="block text-xs font-semibold">
+                  合計時間
+                </label>
                 <input
+                  id="edit-entry-time"
                   type="text"
                   value={entryTimeDraft}
                   onChange={(e) => setEntryTimeDraft(e.target.value)}
                   placeholder="45:00"
-                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold">評価 (1〜5)</label>
+                <label htmlFor="edit-entry-rating" className="block text-xs font-semibold">
+                  評価 (1〜5)
+                </label>
                 <select
+                  id="edit-entry-rating"
                   value={entryRatingDraft}
                   onChange={(e) => setEntryRatingDraft(e.target.value)}
-                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                 >
                   <option value="">未設定</option>
                   {[1, 2, 3, 4, 5].map((n) => (
@@ -655,12 +751,15 @@ export const PracticeLogDetailPage: React.FC = () => {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold">感想・メモ</label>
+                <label htmlFor="edit-entry-impression" className="block text-xs font-semibold">
+                  感想・メモ
+                </label>
                 <textarea
+                  id="edit-entry-impression"
                   rows={3}
                   value={entryImpDraft}
                   onChange={(e) => setEntryImpDraft(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                 />
               </div>
             </div>
@@ -668,10 +767,10 @@ export const PracticeLogDetailPage: React.FC = () => {
               type="button"
               disabled={saving}
               onClick={() => void handleSaveEntryEdit()}
-              className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-sky-600 text-sm font-semibold text-white disabled:opacity-50"
+              className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#0077b6] text-sm font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a]"
             >
               <Save className="h-4 w-4" />
-              <span>{saving ? '保存中...' : '更新を保存（revision 検査付き）'}</span>
+              <span>{saving ? '保存中...' : '変更を保存'}</span>
             </button>
           </div>
         </div>
@@ -679,21 +778,27 @@ export const PracticeLogDetailPage: React.FC = () => {
 
       {/* Edit or Create Set Result Modal */}
       {(editingSet || creatingSetTarget) && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900 space-y-4">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-set-modal-title"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-[#0e1b2e] space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold">
+              <h3 id="edit-set-modal-title" className="text-base font-bold text-[#0b1f3a] dark:text-slate-50">
                 {editingSet
-                  ? `セット結果の編集 (rev.${editingSet.revision})`
+                  ? 'セット結果の編集'
                   : `セット結果の追加 (${creatingSetTarget?.label})`}
               </h3>
               <button
                 type="button"
+                aria-label="閉じる"
                 onClick={() => {
                   setEditingSet(null);
                   setCreatingSetTarget(null);
                 }}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -705,31 +810,40 @@ export const PracticeLogDetailPage: React.FC = () => {
             )}
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold">タイム（例 31.45）</label>
+                <label htmlFor="edit-set-time" className="block text-xs font-semibold">
+                  タイム（例 31.45）
+                </label>
                 <input
+                  id="edit-set-time"
                   type="text"
                   value={setTimeDraft}
                   onChange={(e) => setSetTimeDraft(e.target.value)}
                   placeholder="31.45"
-                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold">各本ラップ（カンマ区切り）</label>
+                <label htmlFor="edit-set-splits" className="block text-xs font-semibold">
+                  各本ラップ（カンマ区切り）
+                </label>
                 <input
+                  id="edit-set-splits"
                   type="text"
                   value={setSplitsDraft}
                   onChange={(e) => setSetSplitsDraft(e.target.value)}
                   placeholder="31.2, 31.5, 31.8"
-                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
+                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold">評価 (1〜5)</label>
+                <label htmlFor="edit-set-rating" className="block text-xs font-semibold">
+                  評価 (1〜5)
+                </label>
                 <select
+                  id="edit-set-rating"
                   value={setRatingDraft}
                   onChange={(e) => setSetRatingDraft(e.target.value)}
-                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                 >
                   <option value="">未設定</option>
                   {[1, 2, 3, 4, 5].map((n) => (
@@ -740,12 +854,15 @@ export const PracticeLogDetailPage: React.FC = () => {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold">メモ・感想</label>
+                <label htmlFor="edit-set-impression" className="block text-xs font-semibold">
+                  メモ・感想
+                </label>
                 <textarea
+                  id="edit-set-impression"
                   rows={2}
                   value={setImpDraft}
                   onChange={(e) => setSetImpDraft(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-[#07111e]"
                 />
               </div>
             </div>
@@ -753,14 +870,14 @@ export const PracticeLogDetailPage: React.FC = () => {
               type="button"
               disabled={saving}
               onClick={() => void handleSaveSetModal()}
-              className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-sky-600 text-sm font-semibold text-white disabled:opacity-50"
+              className="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#0077b6] text-sm font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a]"
             >
               <Save className="h-4 w-4" />
               <span>
                 {saving
                   ? '保存中...'
                   : editingSet
-                  ? '更新を保存（revision 検査付き）'
+                  ? '変更を保存'
                   : 'セット結果を追加'}
               </span>
             </button>

@@ -37,7 +37,7 @@ export const OfflineSyncBanner: React.FC = () => {
             <div className="flex items-center gap-2">
               <WifiOff className="h-4 w-4 shrink-0" />
               <span>
-                オフラインモード — 変更は端末内（IndexedDB）へ安全に保存され、再接続時に同期されます。
+                オフラインモード — 変更はこの端末に保存され、通信回復後に自動同期されます。
               </span>
             </div>
             {pendingCount > 0 && (
@@ -49,18 +49,22 @@ export const OfflineSyncBanner: React.FC = () => {
         )}
 
         {isOnline && pendingCount > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-200">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-[#0b1f3a] dark:border-[#244675] dark:bg-[#132b4f] dark:text-sky-100">
             <div className="flex items-center gap-2">
-              <RefreshCw className={`h-4 w-4 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`h-4 w-4 shrink-0 text-[#0077b6] dark:text-[#38bdf8] ${
+                  isSyncing ? 'animate-spin' : ''
+                }`}
+              />
               <span>
-                未送信データ <strong className="font-mono-num">{pendingCount}</strong> 件を同期待機中です。
+                未送信のデータが <strong className="font-mono-num">{pendingCount}</strong> 件あります。
               </span>
             </div>
             <button
               type="button"
               onClick={() => void syncNow()}
               disabled={isSyncing}
-              className="min-h-[40px] rounded-xl bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+              className="min-h-[44px] rounded-xl bg-[#0077b6] px-4 py-2 text-xs font-semibold text-white hover:bg-[#006094] disabled:opacity-50"
             >
               {isSyncing ? '同期中...' : '今すぐ同期'}
             </button>
@@ -73,10 +77,10 @@ export const OfflineSyncBanner: React.FC = () => {
               <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
               <div>
                 <p className="font-semibold">
-                  同時編集の競合（REVISION_CONFLICT）が {conflictItems.length} 件あります
+                  同じ記録への変更が重なりました（{conflictItems.length}件）
                 </p>
                 <p className="text-xs opacity-90">
-                  相手の変更と端末の変更を両方保持しています。内容を確認して解決してください。
+                  双方の内容を保持しています。どちらを残すか確認してください。
                 </p>
               </div>
             </div>
@@ -93,25 +97,30 @@ export const OfflineSyncBanner: React.FC = () => {
         {errorItems.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
             <div className="space-y-0.5">
-              <p className="font-semibold">同期エラーが {errorItems.length} 件あります</p>
+              <p className="font-semibold">同期に失敗したデータがあります（{errorItems.length}件）</p>
               <p className="text-xs">{errorItems[0].last_error}</p>
             </div>
             <button
               type="button"
               onClick={() => void retryErroredItem(errorItems[0])}
-              className="min-h-[44px] rounded-xl border border-amber-400 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-slate-900 dark:text-amber-200"
+              className="min-h-[44px] rounded-xl border border-amber-400 bg-white px-4 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-[#0e1b2e] dark:text-amber-200"
             >
               再試行
             </button>
           </div>
         )}
 
-        {lastSyncMessage && isOnline && pendingCount === 0 && conflictItems.length === 0 && errorItems.length === 0 && session?.offlineFallback && (
-          <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-            <CheckCircle2 className="h-4 w-4 text-sky-600" />
-            <span>{lastSyncMessage}</span>
-          </div>
-        )}
+        {lastSyncMessage &&
+          isOnline &&
+          pendingCount === 0 &&
+          conflictItems.length === 0 &&
+          errorItems.length === 0 &&
+          session?.offlineFallback && (
+            <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-700 dark:border-[#1e3250] dark:bg-[#0e1b2e] dark:text-slate-300">
+              <CheckCircle2 className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
+              <span>{lastSyncMessage}</span>
+            </div>
+          )}
       </div>
 
       {activeConflict && (

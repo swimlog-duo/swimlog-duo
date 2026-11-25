@@ -141,9 +141,7 @@ export function validateMenuVersionInput(
   const payload: MenuContentJson = { rows };
   const byteLength = getMenuContentByteLength(payload);
   if (byteLength > MAX_MENU_CONTENT_BYTES) {
-    errors.push(
-      `メニューデータ容量が上限（${MAX_MENU_CONTENT_BYTES.toLocaleString()} bytes）を超えています（現在 ${byteLength.toLocaleString()} bytes）。`
-    );
+    errors.push('メニューの内容量が上限を超えています。行やメモを減らしてください。');
   }
 
   return {
@@ -168,7 +166,7 @@ export function deriveMenuStatus(
 export function formatMenuStatusLabel(status: MenuDerivedStatus): string {
   switch (status) {
     case 'unshared':
-      return '未共有';
+      return '下書き';
     case 'shared':
       return '共有中';
     case 'unlisted':

@@ -51,20 +51,20 @@ export const PracticeLogListPage: React.FC = () => {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-slate-50">
-            練習実施記録一覧
+          <h1 className="text-xl font-bold text-[#0b1f3a] dark:text-slate-50">
+            練習記録一覧
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {isAthlete
-              ? '1日に複数メニューの記録や、オフライン入力・自動同期に対応しています'
-              : '選手の記録閲覧・revision制御付き編集・指導コメント追記が行えます'}
+              ? '練習日ごとの実施メニューとタイムを確認・記録できます'
+              : '選手の練習記録の確認とアドバイスができます'}
           </p>
         </div>
 
         {isAthlete && (
           <Link
             to="/logs/new"
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 whitespace-nowrap"
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#0077b6] px-4 py-2 text-sm font-semibold text-white hover:bg-[#005f92] dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc] whitespace-nowrap"
           >
             <Plus className="h-4 w-4" />
             <span>練習を記録する</span>
@@ -73,9 +73,9 @@ export const PracticeLogListPage: React.FC = () => {
       </div>
 
       {days.length === 0 ? (
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-8 text-center text-sm text-slate-500 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] dark:text-slate-400">
           {isAthlete
-            ? 'まだ練習記録がありません。「練習を記録する」から最初のログを作成してください。'
+            ? 'まだ練習記録がありません。「練習を記録する」から最初の記録を作成してください。'
             : '選手から登録された練習記録はまだありません。'}
         </div>
       ) : (
@@ -94,14 +94,14 @@ export const PracticeLogListPage: React.FC = () => {
               <Link
                 key={day.id}
                 to={`/logs/day/${day.id}`}
-                className="block rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-sky-400 dark:border-slate-800 dark:bg-slate-900"
+                className="block rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:border-[#0077b6] dark:border-slate-800/80 dark:bg-[#0e1b2e] dark:hover:border-[#38bdf8]"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 font-mono-num text-base font-bold text-slate-900 dark:text-slate-50">
-                    <Calendar className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                  <div className="flex items-center gap-2 font-mono-num text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+                    <Calendar className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
                     <span>{day.practice_date}</span>
                   </div>
-                  <div className="flex items-center gap-2 font-mono-num text-sm font-bold text-sky-700 dark:text-sky-300">
+                  <div className="flex items-center gap-2 font-mono-num text-sm font-bold text-[#0077b6] dark:text-[#38bdf8]">
                     <span>{formatDistanceM(totalDistance)}</span>
                     <ChevronRight className="h-4 w-4 text-slate-400" />
                   </div>
@@ -117,6 +117,13 @@ export const PracticeLogListPage: React.FC = () => {
                   <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2.5 dark:border-slate-800">
                     {entries.map((entry) => {
                       const ver = versionById.get(entry.menu_version_id);
+                      const detailParts: string[] = [];
+                      if (entry.total_time_ms != null) {
+                        detailParts.push(formatTimeMs(entry.total_time_ms));
+                      }
+                      if (entry.rating != null) {
+                        detailParts.push(`評価 ${entry.rating}/5`);
+                      }
                       return (
                         <div
                           key={entry.id}
@@ -125,13 +132,11 @@ export const PracticeLogListPage: React.FC = () => {
                           <span className="font-semibold">
                             {ver?.title ?? 'メニュー'} (v{ver?.version_no ?? '?'})
                           </span>
-                          <span className="font-mono-num text-slate-500 dark:text-slate-400">
-                            {entry.total_time_ms != null
-                              ? `${formatTimeMs(entry.total_time_ms)} · `
-                              : ''}
-                            {entry.rating != null ? `評価 ${entry.rating}/5 · ` : ''}
-                            rev.{entry.revision}
-                          </span>
+                          {detailParts.length > 0 && (
+                            <span className="font-mono-num text-slate-500 dark:text-slate-400">
+                              {detailParts.join(' · ')}
+                            </span>
+                          )}
                         </div>
                       );
                     })}

@@ -11,10 +11,11 @@
     font-family: var(--font-sans);
     -webkit-tap-highlight-color: transparent;
     -webkit-text-size-adjust: 100%;
+    color-scheme: light dark;
   }
 
   body {
-    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50 antialiased;
+    @apply bg-[#f4f7fb] text-[#0b1f3a] dark:bg-[#07111e] dark:text-slate-50 antialiased;
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
     overscroll-behavior-y: contain;
@@ -28,6 +29,14 @@
     touch-action: manipulation;
   }
 
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #0ea5e9;
+    outline-offset: 2px;
+  }
 }
 
 /* Prevent iOS/iPadOS Safari auto-zoom on form field focus */

@@ -9,6 +9,19 @@ interface ConflictResolverModalProps {
   onClose: () => void;
 }
 
+function formatConflictTargetLabel(tableName: string): string {
+  switch (tableName) {
+    case 'practice_days':
+      return '練習日のメモ';
+    case 'practice_entries':
+      return 'メニュー全体の記録';
+    case 'set_results':
+      return 'セットごとの記録';
+    default:
+      return '練習データ';
+  }
+}
+
 export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
   item,
   onClose,
@@ -23,8 +36,8 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
     (serverRecord && typeof serverRecord.revision === 'number' ? serverRecord.revision : null);
 
   const tableName = detail?.table ?? currentItem.table_name;
+  const targetLabel = formatConflictTargetLabel(tableName);
 
-  // Editable merged fields depending on table
   const [mergedNote, setMergedNote] = useState<string>(() =>
     String(currentItem.payload.note ?? serverRecord?.note ?? '')
   );
@@ -58,15 +71,13 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
     if (tableName === 'practice_days') {
       rows.push({
         label: 'メモ',
-        serverVal: serverRecord ? String(srv.note ?? '—') : '（未取得）',
+        serverVal: serverRecord ? String(srv.note ?? '—') : '未取得',
         localVal: String(currentItem.payload.note ?? '—'),
       });
     } else if (tableName === 'practice_entries') {
       rows.push({
         label: '合計時間',
-        serverVal: serverRecord
-          ? formatTimeMs(srv.total_time_ms as number | null)
-          : '（未取得）',
+        serverVal: serverRecord ? formatTimeMs(srv.total_time_ms as number | null) : '未取得',
         localVal: formatTimeMs(currentItem.payload.total_time_ms as number | null),
       });
       rows.push({
@@ -75,18 +86,18 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
           ? srv.rating != null
             ? `${srv.rating}/5`
             : '—'
-          : '（未取得）',
+          : '未取得',
         localVal: currentItem.payload.rating != null ? `${currentItem.payload.rating}/5` : '—',
       });
       rows.push({
         label: '感想',
-        serverVal: serverRecord ? String(srv.impression ?? '—') : '（未取得）',
+        serverVal: serverRecord ? String(srv.impression ?? '—') : '未取得',
         localVal: String(currentItem.payload.impression ?? '—'),
       });
     } else if (tableName === 'set_results') {
       rows.push({
         label: 'タイム',
-        serverVal: serverRecord ? formatTimeMs(srv.time_ms as number | null) : '（未取得）',
+        serverVal: serverRecord ? formatTimeMs(srv.time_ms as number | null) : '未取得',
         localVal: formatTimeMs(currentItem.payload.time_ms as number | null),
       });
       rows.push({
@@ -95,12 +106,12 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
           ? srv.rating != null
             ? `${srv.rating}/5`
             : '—'
-          : '（未取得）',
+          : '未取得',
         localVal: currentItem.payload.rating != null ? `${currentItem.payload.rating}/5` : '—',
       });
       rows.push({
         label: 'メモ・感想',
-        serverVal: serverRecord ? String(srv.impression ?? '—') : '（未取得）',
+        serverVal: serverRecord ? String(srv.impression ?? '—') : '未取得',
         localVal: String(currentItem.payload.impression ?? '—'),
       });
     }
@@ -122,7 +133,7 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
       }
     } catch (err) {
       setRefetchError(
-        err instanceof Error ? err.message : 'サーバー最新データの取得に失敗しました。'
+        err instanceof Error ? err.message : '最新データの取得に失敗しました。'
       );
     } finally {
       setRefreshing(false);
@@ -172,20 +183,19 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
       aria-modal="true"
       aria-labelledby="conflict-modal-title"
     >
-      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900 space-y-5">
+      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-[#1e3250] dark:bg-[#0e1b2e] space-y-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="h-6 w-6 shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" />
             <div>
               <h2
                 id="conflict-modal-title"
-                className="text-lg font-bold text-slate-900 dark:text-slate-50"
+                className="text-lg font-bold text-[#0b1f3a] dark:text-slate-50"
               >
-                同時編集の競合解決（PT409）
+                変更の競合を解決
               </h2>
-              <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 font-mono-num">
-                対象: {tableName} · 送信時 rev.{currentItem.expected_revision ?? '?'} / サーバー最新 rev.
-                {serverRevision ?? '?'}
+              <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                対象: {targetLabel}（先に保存された変更があります）
               </p>
             </div>
           </div>
@@ -193,7 +203,7 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="閉じる"
-            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-[#13243c]"
           >
             <X className="h-5 w-5" />
           </button>
@@ -202,16 +212,16 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
         {(serverRevision == null || !serverRecord) && (
           <div className="rounded-2xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200 space-y-2">
             <p className="font-semibold">
-              サーバー側の最新データが未取得のため、最新 revision を確認できていません（端末の変更は安全に保持されています）。
+              最新の保存内容をまだ確認できていません（この端末の入力内容は保持されています）。
             </p>
             <button
               type="button"
               disabled={refreshing || busy}
               onClick={() => void handleRefreshServer()}
-              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-amber-600 px-3.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              <span>{refreshing ? '再取得中...' : 'サーバー最新データを再取得'}</span>
+              <span>{refreshing ? '取得中...' : '最新の記録を確認'}</span>
             </button>
           </div>
         )}
@@ -222,10 +232,10 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
               type="button"
               disabled={refreshing || busy}
               onClick={() => void handleRefreshServer()}
-              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 text-xs font-semibold text-[#0b1f3a] hover:bg-slate-100 disabled:opacity-50 dark:border-[#2a4266] dark:bg-[#13243c] dark:text-slate-200"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              <span>{refreshing ? '再取得中...' : 'サーバー最新値を再取得'}</span>
+              <span>{refreshing ? '取得中...' : '最新値を再確認'}</span>
             </button>
           </div>
         )}
@@ -237,22 +247,22 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
         )}
 
         {/* Comparison Table */}
-        <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800">
-          <div className="grid grid-cols-3 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+        <div className="overflow-hidden rounded-2xl border border-slate-200 dark:border-[#1e3250]">
+          <div className="grid grid-cols-3 bg-slate-100 px-3 py-2 text-xs font-semibold text-[#0b1f3a] dark:bg-[#13243c] dark:text-slate-200">
             <span>項目</span>
-            <span>サーバー最新値</span>
-            <span>この端末の変更</span>
+            <span>保存済みの最新</span>
+            <span>この端末の入力</span>
           </div>
-          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+          <div className="divide-y divide-slate-200 dark:divide-[#1e3250]">
             {serverSummaryRows.map((row) => (
               <div key={row.label} className="grid grid-cols-3 gap-2 px-3 py-2.5 text-xs">
                 <span className="font-semibold text-slate-700 dark:text-slate-300">
                   {row.label}
                 </span>
-                <span className="text-slate-900 dark:text-slate-100 break-words">
+                <span className="text-[#0b1f3a] dark:text-slate-100 break-words">
                   {row.serverVal}
                 </span>
-                <span className="text-sky-700 dark:text-sky-300 font-medium break-words">
+                <span className="text-[#0077b6] dark:text-[#38bdf8] font-medium break-words">
                   {row.localVal}
                 </span>
               </div>
@@ -261,21 +271,25 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
         </div>
 
         {/* Merge Editor */}
-        <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+        <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-[#1e3250] dark:bg-[#07111e]/70">
+          <h3 className="text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
             統合して保存する内容を編集
           </h3>
 
           {tableName === 'practice_days' && (
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                練習日メモ
+              <label
+                htmlFor="conflict-merged-note"
+                className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+              >
+                その日のメモ
               </label>
               <textarea
+                id="conflict-merged-note"
                 rows={3}
                 value={mergedNote}
                 onChange={(e) => setMergedNote(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-[#0b1f3a] dark:border-[#2a4266] dark:bg-[#0e1b2e] dark:text-slate-100"
               />
             </div>
           )}
@@ -284,24 +298,32 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  <label
+                    htmlFor="conflict-merged-time"
+                    className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+                  >
                     {tableName === 'practice_entries' ? '合計時間' : 'タイム'}（例 1:23.45）
                   </label>
                   <input
+                    id="conflict-merged-time"
                     type="text"
                     value={mergedTimeText}
                     onChange={(e) => setMergedTimeText(e.target.value)}
-                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono-num text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono-num text-sm text-[#0b1f3a] dark:border-[#2a4266] dark:bg-[#0e1b2e] dark:text-slate-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  <label
+                    htmlFor="conflict-merged-rating"
+                    className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+                  >
                     評価 (1〜5)
                   </label>
                   <select
+                    id="conflict-merged-rating"
                     value={mergedRating}
                     onChange={(e) => setMergedRating(e.target.value)}
-                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-[#0b1f3a] dark:border-[#2a4266] dark:bg-[#0e1b2e] dark:text-slate-100"
                   >
                     <option value="">未評価</option>
                     {[1, 2, 3, 4, 5].map((n) => (
@@ -313,14 +335,18 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <label
+                  htmlFor="conflict-merged-impression"
+                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+                >
                   感想・メモ
                 </label>
                 <textarea
+                  id="conflict-merged-impression"
                   rows={2}
                   value={mergedImpression}
                   onChange={(e) => setMergedImpression(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-[#0b1f3a] dark:border-[#2a4266] dark:bg-[#0e1b2e] dark:text-slate-100"
                 />
               </div>
             </>
@@ -332,18 +358,18 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
             type="button"
             disabled={busy}
             onClick={() => void handleUseServer()}
-            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-[#0b1f3a] hover:bg-slate-100 dark:border-[#2a4266] dark:bg-[#13243c] dark:text-slate-100"
           >
-            サーバー最新値を採用（端末変更を取下げ）
+            保存済みの最新を採用（入力を取下げ）
           </button>
           <button
             type="button"
             disabled={busy || serverRevision == null}
             onClick={() => void handleSaveMerged()}
-            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-[#0077b6] px-4 py-2 text-sm font-semibold text-white hover:bg-[#006094] disabled:opacity-50"
           >
             <Check className="h-4 w-4" />
-            <span>rev.{serverRevision ?? '?'} を基準に統合保存</span>
+            <span>入力内容で統合して保存</span>
           </button>
         </div>
       </div>
