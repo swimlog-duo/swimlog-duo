@@ -661,4 +661,100 @@ test.describe('SwimLog Duo 総合品質・デザイン監査 E2E', () => {
 
     await assertCleanRuntime(consoleErrors, pageErrors, context);
   });
+
+  test('8. コーチ・選手間主要連携フロー：メニュー作成・保存編集・共有・選手確認・記録作成・コーチ確認・コメント・選手確認', async ({
+    browser,
+  }) => {
+    const mock = new MockSupabaseServer({
+      athleteDisplayName: '田中 太郎',
+      coachDisplayName: '佐藤 コーチ',
+    });
+    const { context, page, consoleErrors, pageErrors } = await createMobilePage(browser, mock);
+
+    // 1. コーチによる練習メニュー作成
+    await page.goto('/');
+    await signInOnLoginScreen(page, 'coach', MOCK_COACH_EMAIL, MOCK_PASSWORD);
+    await expect(page.getByText('コーチダッシュボード · 佐藤 コーチ')).toBeVisible();
+
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('メニュー').click();
+    await page.getByRole('link', { name: '新規作成' }).click();
+    await expect(page.getByRole('heading', { name: '新しい練習メニューを作成' })).toBeVisible();
+    await page.locator('#menu-title').fill('連携テスト用 スプリント強化');
+    await page.getByRole('button', { name: 'メニュー行を追加' }).click();
+
+    // 2. メニューの保存・編集
+    await page.getByRole('button', { name: 'メニューを保存' }).click();
+    await expect(page.getByRole('heading', { name: '連携テスト用 スプリント強化' })).toBeVisible();
+
+    // 改訂・編集（v2作成）
+    await page.getByRole('link', { name: '改訂（新版作成）' }).click();
+    await expect(page.getByRole('heading', { name: 'メニュー改訂（新バージョン作成）' })).toBeVisible();
+    await page.locator('#menu-title').fill('連携テスト用 スプリント強化 v2');
+    await page.getByRole('button', { name: '新バージョンを保存' }).click();
+    await expect(page.getByText('第2版')).toBeVisible();
+
+    // 3. メニューの共有
+    const shareButton = page.getByRole('button', { name: '共有中にする' });
+    if (await shareButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await shareButton.click();
+    }
+    await expect(page.getByRole('button', { name: '非共有にする' })).toBeVisible();
+
+    // 4. 選手側での共有メニュー確認
+    await page.locator('header button').filter({ hasText: '佐藤 コーチ' }).click();
+    await signInOnLoginScreen(page, 'athlete', MOCK_ATHLETE_EMAIL, MOCK_PASSWORD);
+    await expect(page.locator('header button').filter({ hasText: '田中 太郎' })).toBeVisible();
+    await page.getByRole('button', { name: '同期を実行' }).click();
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('メニュー').click();
+    await expect(page.getByText('連携テスト用 スプリント強化 v2')).toBeVisible();
+
+    // 5. 選手による練習記録の作成
+    await page
+      .locator('div')
+      .filter({ hasText: '連携テスト用 スプリント強化 v2' })
+      .getByRole('link', { name: 'このメニューで記録' })
+      .first()
+      .click();
+    await expect(page.getByRole('heading', { name: '練習日の登録' })).toBeVisible();
+
+    const firstSetInput = page.locator('input[placeholder="31.45"]').first();
+    if (await firstSetInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await firstSetInput.fill('30.20');
+    }
+    await page.locator('input[placeholder="45:00"]').fill('38:30');
+    await page.locator('textarea').first().fill('テンポよく泳ぎ切ることができた');
+    await page.getByRole('button', { name: '練習記録を保存する' }).click();
+    await expect(page).toHaveURL(/#\/logs\/day\//);
+    await expect(page.getByText('38:30.00')).toBeVisible();
+    await expect(page.getByText('テンポよく泳ぎ切ることができた')).toBeVisible();
+
+    // 6. コーチ側での練習記録確認（ヘッダータップで即座にコーチ枠へ切替）
+    await page.locator('header button').filter({ hasText: '田中 太郎' }).click();
+    await expect(page.locator('header button').filter({ hasText: '佐藤 コーチ' })).toBeVisible();
+    await page.getByRole('button', { name: '同期を実行' }).click();
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('練習記録').click();
+    await page.locator('main a[href^="#/logs/day/"]').first().click();
+    await expect(page.getByText('38:30.00')).toBeVisible();
+    await expect(page.getByText('テンポよく泳ぎ切ることができた')).toBeVisible();
+
+    // 7. コーチによるコメント投稿
+    await page.getByRole('button', { name: 'コメントを書く' }).click();
+    await page.locator('textarea[placeholder*="フィードバックコメント"]').fill('素晴らしいペース配分です！');
+    await page.getByRole('button', { name: 'コメントを投稿' }).click();
+    await expect(page.getByText('素晴らしいペース配分です！')).toBeVisible();
+
+    // 8. 選手側でのコメント確認（ヘッダータップで選手枠へ戻る）
+    await page.locator('header button').filter({ hasText: '佐藤 コーチ' }).click();
+    await expect(page.locator('header button').filter({ hasText: '田中 太郎' })).toBeVisible();
+    await page.getByRole('button', { name: '同期を実行' }).click();
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('練習記録').click();
+    await page.locator('main a[href^="#/logs/day/"]').first().click();
+    await expect(page.getByText('素晴らしいペース配分です！')).toBeVisible();
+
+    // 選手ホーム画面の「最新のコーチコメント」欄でも確認
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('ホーム').click();
+    await expect(page.getByText('素晴らしいペース配分です！')).toBeVisible();
+
+    await assertCleanRuntime(consoleErrors, pageErrors, context);
+  });
 });
