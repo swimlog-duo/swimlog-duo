@@ -14,6 +14,7 @@ import type {
 } from '../types/database';
 import type { AppDatasetSnapshot, ConflictDetail } from '../types/domain';
 import { validateMenuVersionInput } from '../utils/swimCalculations';
+import { normalizeDisplayName, validateDisplayNameInput } from '../utils/displayName';
 
 export interface ParsedSupabaseError {
   kind:
@@ -578,3 +579,41 @@ export async function fetchSingleRecordForConflict(
   if (error) return null;
   return (data as Record<string, unknown> | null) ?? null;
 }
+
+export async function updateMyDisplayNameOnServer(
+  client: SupabaseClient,
+  rawDisplayName: string
+): Promise<string> {
+  const check = validateDisplayNameInput(rawDisplayName);
+  if (!check.valid) {
+    throw new Error(check.error);
+  }
+
+  const { data, error } = await client.rpc('update_my_display_name', {
+    new_display_name: check.normalized,
+  });
+
+  if (error) {
+    const parsed = parseSupabaseError(error);
+    if (parsed.kind === 'AUTH' || error.code === '42501') {
+      throw new Error('認証状態を確認できませんでした。再度ログインしてからお試しください。');
+    }
+    if (parsed.kind === 'NETWORK') {
+      throw new Error('通信エラーのため表示名を更新できませんでした。通信環境を確認してください。');
+    }
+    if (error.code === 'P0002') {
+      throw new Error('対象アカウントのプロフィール行が見つかりません。管理者設定を確認してください。');
+    }
+    if (error.code === '22023') {
+      throw new Error(error.message || '表示名の入力形式が正しくありません。');
+    }
+    throw new Error(error.message || '表示名の更新に失敗しました。');
+  }
+
+  const saved = typeof data === 'string' ? normalizeDisplayName(data) : '';
+  if (!saved) {
+    throw new Error('サーバーから有効な表示名が返されませんでした。');
+  }
+  return saved;
+}
+

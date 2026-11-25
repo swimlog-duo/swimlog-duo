@@ -29,6 +29,7 @@ export const PracticeLogEditorPage: React.FC = () => {
   const { session } = useAuth();
   const { dataset, savePracticeLogBatch } = useSwimData();
 
+  const userId = session?.userId ?? '';
   const isAthlete = session?.role === 'athlete';
 
   // RLS permits athlete to attach only shared menu versions
@@ -70,6 +71,8 @@ export const PracticeLogEditorPage: React.FC = () => {
   const [rowInputs, setRowInputs] = useState<Record<string, RowLogInput>>({});
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const isDirtyRef = useRef(false);
+  const loadedDraftScopeRef = useRef<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const draftKey = `practice_log_new_${presetDayId || 'day'}`;
@@ -89,7 +92,18 @@ export const PracticeLogEditorPage: React.FC = () => {
   );
 
   useEffect(() => {
-    if (!session || !isAthlete) return;
+    if (!userId || !isAthlete) {
+      loadedDraftScopeRef.current = null;
+      return;
+    }
+    const scope = `${userId}:${draftKey}:${presetDayId}:${presetVersionId}`;
+    if (loadedDraftScopeRef.current === scope) {
+      return;
+    }
+    loadedDraftScopeRef.current = scope;
+    isDirtyRef.current = false;
+
+    let cancelled = false;
     void loadDraft<{
       practiceDate: string;
       dayNote: string;
@@ -98,8 +112,8 @@ export const PracticeLogEditorPage: React.FC = () => {
       entryRating: string;
       entryImpression: string;
       rowInputs: Record<string, RowLogInput>;
-    }>(session.userId, draftKey).then((d) => {
-      if (!d) return;
+    }>(userId, draftKey).then((d) => {
+      if (cancelled || isDirtyRef.current || !d) return;
       if (!presetDayId && d.practiceDate) setPracticeDate(d.practiceDate);
       if (d.dayNote) setDayNote(d.dayNote);
       if (!presetVersionId && d.selectedVersionId) setSelectedVersionId(d.selectedVersionId);
@@ -108,12 +122,15 @@ export const PracticeLogEditorPage: React.FC = () => {
       if (d.entryImpression) setEntryImpression(d.entryImpression);
       if (d.rowInputs) setRowInputs(d.rowInputs);
     });
-  }, [session, isAthlete, draftKey, presetDayId, presetVersionId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, isAthlete, draftKey, presetDayId, presetVersionId]);
 
   useEffect(() => {
-    if (!session || !isAthlete) return;
+    if (!userId || !isAthlete || !isDirtyRef.current) return;
     const timer = window.setTimeout(() => {
-      void saveDraft(session.userId, draftKey, {
+      void saveDraft(userId, draftKey, {
         practiceDate,
         dayNote,
         selectedVersionId,
@@ -121,11 +138,11 @@ export const PracticeLogEditorPage: React.FC = () => {
         entryRating,
         entryImpression,
         rowInputs,
-      });
+      }).catch(() => {});
     }, 400);
     return () => window.clearTimeout(timer);
   }, [
-    session,
+    userId,
     isAthlete,
     draftKey,
     practiceDate,
@@ -155,6 +172,7 @@ export const PracticeLogEditorPage: React.FC = () => {
   }
 
   const updateRowInput = (rowId: string, patch: Partial<RowLogInput>) => {
+    isDirtyRef.current = true;
     setRowInputs((prev) => {
       const current = prev[rowId] ?? {
         row_id: rowId,
@@ -272,8 +290,9 @@ export const PracticeLogEditorPage: React.FC = () => {
         set_results: preparedSets,
       });
 
-      if (session) {
-        await deleteDraft(session.userId, draftKey);
+      isDirtyRef.current = false;
+      if (userId) {
+        await deleteDraft(userId, draftKey);
       }
       navigate(`/logs/day/${dayId}`);
     } catch (err) {
@@ -310,7 +329,10 @@ export const PracticeLogEditorPage: React.FC = () => {
             </label>
             <select
               value={selectedDayId}
-              onChange={(e) => setSelectedDayId(e.target.value)}
+              onChange={(e) => {
+                isDirtyRef.current = true;
+                setSelectedDayId(e.target.value);
+              }}
               className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
             >
               <option value="NEW">新しい練習日を作成（同日があれば統合）</option>
@@ -331,7 +353,10 @@ export const PracticeLogEditorPage: React.FC = () => {
                 type="date"
                 required
                 value={practiceDate}
-                onChange={(e) => setPracticeDate(e.target.value)}
+                onChange={(e) => {
+                  isDirtyRef.current = true;
+                  setPracticeDate(e.target.value);
+                }}
                 className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
               />
             </div>
@@ -346,7 +371,10 @@ export const PracticeLogEditorPage: React.FC = () => {
             <input
               type="text"
               value={dayNote}
-              onChange={(e) => setDayNote(e.target.value)}
+              onChange={(e) => {
+                isDirtyRef.current = true;
+                setDayNote(e.target.value);
+              }}
               placeholder="例: 朝練 25mプール 体調良好"
               className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
             />
@@ -359,7 +387,10 @@ export const PracticeLogEditorPage: React.FC = () => {
           </label>
           <select
             value={activeVersion?.id ?? ''}
-            onChange={(e) => setSelectedVersionId(e.target.value)}
+            onChange={(e) => {
+              isDirtyRef.current = true;
+              setSelectedVersionId(e.target.value);
+            }}
             required
             className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
           >
@@ -516,7 +547,10 @@ export const PracticeLogEditorPage: React.FC = () => {
             <input
               type="text"
               value={totalTimeText}
-              onChange={(e) => setTotalTimeText(e.target.value)}
+              onChange={(e) => {
+                isDirtyRef.current = true;
+                setTotalTimeText(e.target.value);
+              }}
               placeholder="45:00"
               className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-slate-950"
             />
@@ -528,7 +562,10 @@ export const PracticeLogEditorPage: React.FC = () => {
             </label>
             <select
               value={entryRating}
-              onChange={(e) => setEntryRating(e.target.value)}
+              onChange={(e) => {
+                isDirtyRef.current = true;
+                setEntryRating(e.target.value);
+              }}
               className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950"
             >
               <option value="">未選択</option>
@@ -548,7 +585,10 @@ export const PracticeLogEditorPage: React.FC = () => {
           <textarea
             rows={3}
             value={entryImpression}
-            onChange={(e) => setEntryImpression(e.target.value)}
+            onChange={(e) => {
+              isDirtyRef.current = true;
+              setEntryImpression(e.target.value);
+            }}
             placeholder="泳ぎの感触、課題、良かった点など"
             className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
           />

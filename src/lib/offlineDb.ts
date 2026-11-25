@@ -64,6 +64,7 @@ interface SwimlogOfflineSchema extends DBSchema {
 }
 
 let dbPromise: Promise<IDBPDatabase<SwimlogOfflineSchema>> | null = null;
+const cacheSnapshotLocks = new Map<string, Promise<void>>();
 
 export function getOfflineDb(): Promise<IDBPDatabase<SwimlogOfflineSchema>> {
   if (!dbPromise) {
@@ -93,6 +94,29 @@ export function getOfflineDb(): Promise<IDBPDatabase<SwimlogOfflineSchema>> {
 
 export function resetOfflineDbConnectionForTest(): void {
   dbPromise = null;
+  cacheSnapshotLocks.clear();
+}
+
+export async function runWithCacheSnapshotLock<T>(
+  ownerUserId: string,
+  task: () => Promise<T>
+): Promise<T> {
+  const previous = cacheSnapshotLocks.get(ownerUserId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current);
+  cacheSnapshotLocks.set(ownerUserId, queued);
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+    if (cacheSnapshotLocks.get(ownerUserId) === queued) {
+      cacheSnapshotLocks.delete(ownerUserId);
+    }
+  }
 }
 
 export function createEmptyDataset(): AppDatasetSnapshot {
@@ -126,6 +150,34 @@ export async function saveCachedDataset(
     owner_user_id: ownerUserId,
     dataset,
     updated_at: new Date().toISOString(),
+  });
+}
+
+/**
+ * Re-reads the latest IndexedDB `cache_snapshots` entry for `ownerUserId` under a
+ * per-owner mutex and patches ONLY `display_name` on the matching own `profiles` row.
+ * Never fabricates missing rows or alters other profiles/tables/outbox.
+ */
+export async function patchOwnProfileDisplayNameInCache(
+  ownerUserId: string,
+  savedDisplayName: string
+): Promise<AppDatasetSnapshot> {
+  return runWithCacheSnapshotLock(ownerUserId, async () => {
+    const latestCache = await loadCachedDataset(ownerUserId);
+    const targetIndex = latestCache.profiles.findIndex((p) => p.id === ownerUserId);
+    if (targetIndex === -1) {
+      throw new Error('ローカルキャッシュに本人プロフィール行が見つかりません。');
+    }
+
+    const nextProfiles = latestCache.profiles.map((p, idx) =>
+      idx === targetIndex ? { ...p, display_name: savedDisplayName } : p
+    );
+    const nextCache: AppDatasetSnapshot = {
+      ...latestCache,
+      profiles: nextProfiles,
+    };
+    await saveCachedDataset(ownerUserId, nextCache);
+    return nextCache;
   });
 }
 
@@ -386,7 +438,9 @@ export async function importBackupBundle(
     );
   }
 
-  await saveCachedDataset(targetUserId, bundle.dataset);
+  await runWithCacheSnapshotLock(targetUserId, async () => {
+    await saveCachedDataset(targetUserId, bundle.dataset);
+  });
   await saveCompetitions(targetUserId, bundle.competitions ?? []);
   await saveTemplateMeta(targetUserId, bundle.template_meta ?? []);
 

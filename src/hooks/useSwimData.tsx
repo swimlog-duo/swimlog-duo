@@ -30,6 +30,7 @@ import {
   resolveConflictWithMergedPayload,
   runSyncForAccount,
 } from '../lib/syncEngine';
+import { executeDisplayNameUpdate } from '../lib/profileService';
 import type { MenuContentJson, MenuItemRow, SplitRecord } from '../types/database';
 import type {
   AppDatasetSnapshot,
@@ -38,9 +39,10 @@ import type {
   OutboxItem,
   SwimlogBackupBundle,
 } from '../types/domain';
+import { validateDisplayNameInput } from '../utils/displayName';
 import { createUuid, validateMenuVersionInput } from '../utils/swimCalculations';
 import { useAuth } from './useAuth';
-import { useOnlineStatus } from './useOnlineStatus';
+import { getCurrentOnlineStatus, useOnlineStatus } from './useOnlineStatus';
 
 interface SwimDataContextValue {
   dataset: AppDatasetSnapshot;
@@ -49,11 +51,13 @@ interface SwimDataContextValue {
   competitions: LocalCompetitionGoal[];
   templateMeta: LocalTemplateMeta[];
   isSyncing: boolean;
+  isUpdatingProfile: boolean;
   lastSyncMessage: string | null;
   pendingCount: number;
   conflictItems: OutboxItem[];
   errorItems: OutboxItem[];
   syncNow: () => Promise<void>;
+  updateMyDisplayName: (rawDisplayName: string) => Promise<string>;
   // Coach menu actions
   createMenu: (params: {
     title: string;
@@ -161,7 +165,7 @@ interface SwimDataContextValue {
 const SwimDataContext = createContext<SwimDataContextValue | null>(null);
 
 export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { session } = useAuth();
+  const { session, refreshSession, updateSessionDisplayName } = useAuth();
   const isOnline = useOnlineStatus();
 
   const [dataset, setDataset] = useState<AppDatasetSnapshot>(() => createEmptyDataset());
@@ -170,14 +174,35 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [competitions, setCompetitions] = useState<LocalCompetitionGoal[]>([]);
   const [templateMeta, setTemplateMeta] = useState<LocalTemplateMeta[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [lastSyncMessage, setLastSyncMessage] = useState<string | null>(null);
-  const syncingRef = useRef(false);
-  const pendingResyncRef = useRef(false);
+  const syncingKeysRef = useRef<Set<string>>(new Set());
+  const pendingResyncKeysRef = useRef<Set<string>>(new Set());
+  const profileUpdatingKeysRef = useRef<Set<string>>(new Set());
+  const importingBackupKeysRef = useRef<Set<string>>(new Set());
   const lastSyncCompletedAtRef = useRef(0);
   const lastLoadedSessionKeyRef = useRef<string | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const outboxRef = useRef(outbox);
+  outboxRef.current = outbox;
+  const prevOnlineForSyncRef = useRef<boolean>(getCurrentOnlineStatus());
+
+  const refreshActiveOperationFlags = useCallback(() => {
+    const active = sessionRef.current;
+    if (!active) {
+      setIsSyncing(false);
+      setIsUpdatingProfile(false);
+      return;
+    }
+    const key = `${active.slot}:${active.userId}`;
+    setIsSyncing(syncingKeysRef.current.has(key));
+    setIsUpdatingProfile(profileUpdatingKeysRef.current.has(key));
+  }, []);
 
   const reloadLocalForSession = useCallback(async () => {
-    if (!session) {
+    const activeSession = sessionRef.current;
+    if (!activeSession) {
       lastLoadedSessionKeyRef.current = null;
       setDataset(createEmptyDataset());
       setOutbox([]);
@@ -187,43 +212,63 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return;
     }
     const [cached, ownerOutbox, counts, comps, tpls] = await Promise.all([
-      loadCachedDataset(session.userId),
-      listOutboxForOwner(session.userId),
+      loadCachedDataset(activeSession.userId),
+      listOutboxForOwner(activeSession.userId),
       listAllOutboxCountsByOwner(),
-      loadCompetitions(session.userId),
-      loadTemplateMeta(session.userId),
+      loadCompetitions(activeSession.userId),
+      loadTemplateMeta(activeSession.userId),
     ]);
+    if (
+      sessionRef.current?.userId !== activeSession.userId ||
+      sessionRef.current?.slot !== activeSession.slot
+    ) {
+      return;
+    }
     setDataset(applyOutboxOverlayToDataset(cached, ownerOutbox));
     setOutbox(ownerOutbox);
     setAllOutboxCounts(counts);
     setCompetitions(comps);
     setTemplateMeta(tpls);
-  }, [session]);
+  }, []);
 
   const syncNow = useCallback(async () => {
-    if (!session) return;
-    if (!isOnline) {
+    const targetSession = sessionRef.current;
+    if (!targetSession) return;
+    const lockKey = `${targetSession.slot}:${targetSession.userId}`;
+    const onlineNow = getCurrentOnlineStatus();
+    if (!onlineNow) {
       setLastSyncMessage('オフラインのためローカル保存を継続中です。');
       return;
     }
-    if (syncingRef.current) {
-      pendingResyncRef.current = true;
+    if (
+      syncingKeysRef.current.has(lockKey) ||
+      profileUpdatingKeysRef.current.has(lockKey) ||
+      importingBackupKeysRef.current.has(lockKey)
+    ) {
+      pendingResyncKeysRef.current.add(lockKey);
       return;
     }
 
-    syncingRef.current = true;
-    setIsSyncing(true);
+    syncingKeysRef.current.add(lockKey);
+    refreshActiveOperationFlags();
     try {
       const result = await runSyncForAccount({
-        client: session.client,
-        slot: session.slot,
-        userId: session.userId,
-        role: session.role,
-        isOnline,
+        client: targetSession.client,
+        slot: targetSession.slot,
+        userId: targetSession.userId,
+        role: targetSession.role,
+        isOnline: onlineNow,
       });
+      const stillSameSession =
+        sessionRef.current?.userId === targetSession.userId &&
+        sessionRef.current?.slot === targetSession.slot;
+      if (!stillSameSession) {
+        return;
+      }
+
       setDataset(result.dataset);
       const [ownerOutbox, counts] = await Promise.all([
-        listOutboxForOwner(session.userId),
+        listOutboxForOwner(targetSession.userId),
         listAllOutboxCountsByOwner(),
       ]);
       setOutbox(ownerOutbox);
@@ -242,18 +287,107 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setLastSyncMessage('最新状態です。');
       }
     } catch (err) {
-      setLastSyncMessage(err instanceof Error ? err.message : '同期中にエラーが発生しました。');
+      if (
+        sessionRef.current?.userId === targetSession.userId &&
+        sessionRef.current?.slot === targetSession.slot
+      ) {
+        setLastSyncMessage(err instanceof Error ? err.message : '同期中にエラーが発生しました。');
+      }
     } finally {
-      syncingRef.current = false;
-      setIsSyncing(false);
-      if (pendingResyncRef.current) {
-        pendingResyncRef.current = false;
-        void syncNow();
+      syncingKeysRef.current.delete(lockKey);
+      refreshActiveOperationFlags();
+      if (pendingResyncKeysRef.current.has(lockKey)) {
+        pendingResyncKeysRef.current.delete(lockKey);
+        const isVisible =
+          typeof document === 'undefined' || document.visibilityState === 'visible';
+        const activeNow = sessionRef.current;
+        if (
+          isVisible &&
+          getCurrentOnlineStatus() &&
+          activeNow &&
+          activeNow.slot === targetSession.slot &&
+          activeNow.userId === targetSession.userId
+        ) {
+          void syncNow();
+        }
       }
     }
-  }, [session, isOnline]);
+  }, [refreshActiveOperationFlags]);
+
+  const updateMyDisplayName = useCallback(
+    async (rawDisplayName: string): Promise<string> => {
+      const check = validateDisplayNameInput(rawDisplayName);
+      if (!check.valid) {
+        throw new Error(check.error);
+      }
+
+      const targetSession = sessionRef.current;
+      if (!targetSession) {
+        throw new Error('ログインが必要です。');
+      }
+      if (!getCurrentOnlineStatus()) {
+        throw new Error('オフラインのため表示名を更新できません。インターネット接続を確認してください。');
+      }
+
+      const lockKey = `${targetSession.slot}:${targetSession.userId}`;
+      if (
+        syncingKeysRef.current.has(lockKey) ||
+        importingBackupKeysRef.current.has(lockKey)
+      ) {
+        throw new Error('同期またはバックアップ復元を実行中です。完了後にもう一度お試しください。');
+      }
+      if (profileUpdatingKeysRef.current.has(lockKey)) {
+        throw new Error('表示名を更新中です。完了までお待ちください。');
+      }
+
+      profileUpdatingKeysRef.current.add(lockKey);
+      refreshActiveOperationFlags();
+
+      try {
+        const res = await executeDisplayNameUpdate({
+          slot: targetSession.slot,
+          userId: targetSession.userId,
+          role: targetSession.role,
+          client: targetSession.client,
+          rawDisplayName: check.normalized,
+          isOnline: getCurrentOnlineStatus(),
+          updateSessionDisplayName,
+          refreshSessionOnCacheFailure: refreshSession,
+        });
+
+        const stillSameSession =
+          sessionRef.current?.userId === targetSession.userId &&
+          sessionRef.current?.slot === targetSession.slot;
+        if (stillSameSession) {
+          setDataset(res.overlayDataset);
+          setOutbox(res.latestOutbox);
+        }
+        return res.savedName;
+      } finally {
+        profileUpdatingKeysRef.current.delete(lockKey);
+        refreshActiveOperationFlags();
+        if (pendingResyncKeysRef.current.has(lockKey)) {
+          pendingResyncKeysRef.current.delete(lockKey);
+          const isVisible =
+            typeof document === 'undefined' || document.visibilityState === 'visible';
+          const activeNow = sessionRef.current;
+          if (
+            isVisible &&
+            getCurrentOnlineStatus() &&
+            activeNow &&
+            activeNow.slot === targetSession.slot &&
+            activeNow.userId === targetSession.userId
+          ) {
+            void syncNow();
+          }
+        }
+      }
+    },
+    [refreshActiveOperationFlags, refreshSession, syncNow, updateSessionDisplayName]
+  );
 
   useEffect(() => {
+    refreshActiveOperationFlags();
     if (!session) {
       void reloadLocalForSession();
       return;
@@ -266,36 +400,78 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return;
     }
 
+    prevOnlineForSyncRef.current = getCurrentOnlineStatus();
     void reloadLocalForSession().then(() => {
-      if (isOnline) {
+      if (getCurrentOnlineStatus()) {
         void syncNow();
       }
     });
-  }, [session, isOnline, reloadLocalForSession, syncNow]);
+  }, [session, refreshActiveOperationFlags, reloadLocalForSession, syncNow]);
 
   useEffect(() => {
     if (!session) return;
-    const triggerPassiveSync = () => {
-      if (!navigator.onLine) return;
-      if (Date.now() - lastSyncCompletedAtRef.current < 3000) return;
+    const lockKey = `${session.slot}:${session.userId}`;
+
+    const triggerOnlineRecoverySync = () => {
+      if (!getCurrentOnlineStatus()) {
+        prevOnlineForSyncRef.current = false;
+        return;
+      }
+      const wasOffline = !prevOnlineForSyncRef.current;
+      prevOnlineForSyncRef.current = true;
+      const isVisible =
+        typeof document === 'undefined' || document.visibilityState === 'visible';
+      if (!isVisible) {
+        return;
+      }
+      const hasUnsentPending = outboxRef.current.some(
+        (item) => item.status === 'pending' || item.status === 'syncing'
+      );
+      if (wasOffline) {
+        void syncNow();
+      } else if (hasUnsentPending && !syncingKeysRef.current.has(lockKey)) {
+        void syncNow();
+      }
+    };
+
+    const triggerVisibilitySync = () => {
+      if (!getCurrentOnlineStatus()) return;
+      const hasUnsentPending = outboxRef.current.some(
+        (item) => item.status === 'pending' || item.status === 'syncing'
+      );
+      if (!hasUnsentPending && Date.now() - lastSyncCompletedAtRef.current < 3000) {
+        return;
+      }
       void syncNow();
     };
+
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        triggerPassiveSync();
+        triggerVisibilitySync();
       }
     };
     const handleOnline = () => {
-      triggerPassiveSync();
+      triggerOnlineRecoverySync();
     };
+    const handleOffline = () => {
+      prevOnlineForSyncRef.current = false;
+    };
+
+    if (isOnline && !prevOnlineForSyncRef.current) {
+      triggerOnlineRecoverySync();
+    } else if (!isOnline) {
+      prevOnlineForSyncRef.current = false;
+    }
 
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
-  }, [session, syncNow]);
+  }, [session?.slot, session?.userId, isOnline, syncNow]);
 
   const enqueueAndApply = useCallback(
     async (items: OutboxItem[]) => {
@@ -308,11 +484,11 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       await reloadLocalForSession();
 
-      if (isOnline) {
+      if (getCurrentOnlineStatus()) {
         void syncNow();
       }
     },
-    [session, isOnline, reloadLocalForSession, syncNow]
+    [session, reloadLocalForSession, syncNow]
   );
 
   const createMenu = useCallback(
@@ -393,12 +569,12 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       await reloadLocalForSession();
-      if (isOnline) {
+      if (getCurrentOnlineStatus()) {
         void syncNow();
       }
       return menuId;
     },
-    [session, isOnline, reloadLocalForSession, syncNow]
+    [session, reloadLocalForSession, syncNow]
   );
 
   const reviseMenu = useCallback(
@@ -823,9 +999,9 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     async (item: OutboxItem) => {
       await resolveConflictUseServer(item);
       await reloadLocalForSession();
-      if (isOnline) void syncNow();
+      if (getCurrentOnlineStatus()) void syncNow();
     },
-    [reloadLocalForSession, isOnline, syncNow]
+    [reloadLocalForSession, syncNow]
   );
 
   const submitMergedConflict = useCallback(
@@ -836,9 +1012,9 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     ) => {
       await resolveConflictWithMergedPayload(item, mergedPayload, serverRevision);
       await reloadLocalForSession();
-      if (isOnline) void syncNow();
+      if (getCurrentOnlineStatus()) void syncNow();
     },
-    [reloadLocalForSession, isOnline, syncNow]
+    [reloadLocalForSession, syncNow]
   );
 
   const refreshConflictRecord = useCallback(
@@ -864,9 +1040,9 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     async (item: OutboxItem) => {
       await updateOutboxItem({ ...item, status: 'pending', last_error: null });
       await reloadLocalForSession();
-      if (isOnline) void syncNow();
+      if (getCurrentOnlineStatus()) void syncNow();
     },
-    [reloadLocalForSession, isOnline, syncNow]
+    [reloadLocalForSession, syncNow]
   );
 
   const discardOutboxItem = useCallback(
@@ -906,12 +1082,44 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const importJsonBackup = useCallback(
     async (bundle: SwimlogBackupBundle) => {
-      if (!session) throw new Error('ログインが必要です。');
-      const res = await importBackupBundle(bundle, session.userId, session.role);
-      await reloadLocalForSession();
-      return res;
+      const targetSession = sessionRef.current;
+      if (!targetSession) throw new Error('ログインが必要です。');
+      const lockKey = `${targetSession.slot}:${targetSession.userId}`;
+      if (
+        syncingKeysRef.current.has(lockKey) ||
+        profileUpdatingKeysRef.current.has(lockKey) ||
+        importingBackupKeysRef.current.has(lockKey)
+      ) {
+        throw new Error('同期または表示名更新中のため、完了後に再度復元を実行してください。');
+      }
+      importingBackupKeysRef.current.add(lockKey);
+      let importSucceeded = false;
+      try {
+        const res = await importBackupBundle(bundle, targetSession.userId, targetSession.role);
+        await reloadLocalForSession();
+        importSucceeded = true;
+        return res;
+      } finally {
+        importingBackupKeysRef.current.delete(lockKey);
+        if (pendingResyncKeysRef.current.has(lockKey)) {
+          pendingResyncKeysRef.current.delete(lockKey);
+          const isVisible =
+            typeof document === 'undefined' || document.visibilityState === 'visible';
+          const activeNow = sessionRef.current;
+          if (
+            !importSucceeded &&
+            isVisible &&
+            getCurrentOnlineStatus() &&
+            activeNow &&
+            activeNow.slot === targetSession.slot &&
+            activeNow.userId === targetSession.userId
+          ) {
+            void syncNow();
+          }
+        }
+      }
     },
-    [session, reloadLocalForSession]
+    [reloadLocalForSession, syncNow]
   );
 
   const pendingCount = useMemo(
@@ -935,11 +1143,13 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       competitions,
       templateMeta,
       isSyncing,
+      isUpdatingProfile,
       lastSyncMessage,
       pendingCount,
       conflictItems,
       errorItems,
       syncNow,
+      updateMyDisplayName,
       createMenu,
       reviseMenu,
       updateMenuStatus,
@@ -968,11 +1178,13 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       competitions,
       templateMeta,
       isSyncing,
+      isUpdatingProfile,
       lastSyncMessage,
       pendingCount,
       conflictItems,
       errorItems,
       syncNow,
+      updateMyDisplayName,
       createMenu,
       reviseMenu,
       updateMenuStatus,

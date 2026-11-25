@@ -19,7 +19,6 @@ export type MenuDerivedStatus = 'unshared' | 'shared' | 'unlisted' | 'archived';
 export interface SlotAccountMeta {
   slot: AccountSlot;
   userId: string;
-  email: string;
   role: UserRole;
   displayName: string;
   lastAuthenticatedAt: string;

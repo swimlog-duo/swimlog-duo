@@ -189,12 +189,32 @@ describe('2-account auth storage isolation', () => {
 
     const { resolveSlotSessionDetailed, getSlotMeta } = await import('../lib/authManager');
 
-    // 1. Valid relaunch: restored automatically with offlineFallback = false
+    // 1. Valid relaunch: restored automatically with offlineFallback = false and without saving email
     mode = 'valid';
     const validRes = await resolveSlotSessionDetailed('coach', true);
     expect(validRes.session?.userId).toBe('coach-uid-1');
+    expect(validRes.session?.displayName).toBe('Coach Sato');
     expect(validRes.session?.offlineFallback).toBe(false);
     expect(validRes.reauthRequiredReason).toBeNull();
+    expect(getSlotMeta('coach')).not.toHaveProperty('email');
+    expect(window.localStorage.getItem('swimlog-duo-slot-meta-coach')).not.toContain('coach@example.com');
+
+    // Legacy slot metadata with email fallback is readable without forcing sign-out, but strips email
+    window.localStorage.setItem(
+      'swimlog-duo-slot-meta-athlete',
+      JSON.stringify({
+        slot: 'athlete',
+        userId: 'ath-uid-1',
+        email: 'ath@example.com',
+        role: 'athlete',
+        displayName: 'ath@example.com',
+        lastAuthenticatedAt: '2026-11-23T00:00:00Z',
+      })
+    );
+    const legacyAth = getSlotMeta('athlete');
+    expect(legacyAth?.userId).toBe('ath-uid-1');
+    expect(legacyAth?.displayName).toBe('');
+    expect(legacyAth).not.toHaveProperty('email');
 
     // 2. Weak network while navigator.onLine is true: preserved via offlineFallback = true
     mode = 'network_err';
@@ -238,4 +258,46 @@ describe('2-account auth storage isolation', () => {
       validateSupabasePublicConfig('https://demo.supabase.co', 'sb_publishable_12345')
     ).toBeNull();
   });
+
+  it('does not recreate slot metadata in syncSlotMetaDisplayName after sign-out and updates active slot cleanly without email', async () => {
+    const { getSlotMeta, syncSlotMetaDisplayName } = await import('../lib/authManager');
+
+    // Signed out (meta is null): must return null and leave localStorage empty
+    const resWhenSignedOut = syncSlotMetaDisplayName('athlete', 'ath-uid-1', 'athlete', '田中 太郎');
+    expect(resWhenSignedOut).toBeNull();
+    expect(getSlotMeta('athlete')).toBeNull();
+    expect(window.localStorage.getItem('swimlog-duo-slot-meta-athlete')).toBeNull();
+
+    // Active slot: updates displayName without adding email and without touching coach slot
+    window.localStorage.setItem(
+      'swimlog-duo-slot-meta-athlete',
+      JSON.stringify({
+        slot: 'athlete',
+        userId: 'ath-uid-1',
+        role: 'athlete',
+        displayName: '',
+        lastAuthenticatedAt: '2026-11-24T00:00:00Z',
+      })
+    );
+    window.localStorage.setItem(
+      'swimlog-duo-slot-meta-coach',
+      JSON.stringify({
+        slot: 'coach',
+        userId: 'coach-uid-1',
+        role: 'coach',
+        displayName: '佐藤 コーチ',
+        lastAuthenticatedAt: '2026-11-24T00:00:00Z',
+      })
+    );
+
+    const updated = syncSlotMetaDisplayName('athlete', 'ath-uid-1', 'athlete', ' \u3000田中 太郎\u3000 ');
+    expect(updated?.displayName).toBe('田中 太郎');
+    expect(updated).not.toHaveProperty('email');
+    expect(getSlotMeta('athlete')?.displayName).toBe('田中 太郎');
+    expect(getSlotMeta('coach')?.displayName).toBe('佐藤 コーチ');
+    expect(() =>
+      syncSlotMetaDisplayName('athlete', 'other-uid', 'athlete', '別ユーザー')
+    ).toThrow();
+  });
 });
+

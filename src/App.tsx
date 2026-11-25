@@ -1,6 +1,7 @@
 import React from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AnalyticsPage } from './components/analytics/AnalyticsPage';
+import { DisplayNameSetupScreen } from './components/auth/DisplayNameSetupScreen';
 import { LoginScreen } from './components/auth/LoginScreen';
 import { HomePage } from './components/home/HomePage';
 import { AppShell } from './components/layout/AppShell';
@@ -15,6 +16,7 @@ import { SettingsPage } from './components/settings/SettingsPage';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { SwimDataProvider } from './hooks/useSwimData';
 import { useTheme } from './hooks/useTheme';
+import { isDisplayNameEmpty } from './utils/displayName';
 
 const AuthenticatedApp: React.FC = () => {
   const { session, isLoading } = useAuth();
@@ -30,6 +32,10 @@ const AuthenticatedApp: React.FC = () => {
 
   if (!session) {
     return <LoginScreen />;
+  }
+
+  if (isDisplayNameEmpty(session.displayName)) {
+    return <DisplayNameSetupScreen />;
   }
 
   return (

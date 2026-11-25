@@ -82,11 +82,11 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => void switchSlot(otherSlot)}
-                title={`${session.displayName} (${roleLabel}) でログイン中 — タップで${otherLabel}`}
+                title={`${session.displayName || '表示名未設定'} (${roleLabel}) でログイン中 — タップで${otherLabel}`}
                 className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700 whitespace-nowrap shrink-0"
               >
                 <UserCheck className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-                <span className="max-w-[84px] truncate">{session.displayName}</span>
+                <span className="max-w-[84px] truncate">{session.displayName || '表示名未設定'}</span>
                 <span className="text-slate-400" aria-hidden="true">
                   ·
                 </span>

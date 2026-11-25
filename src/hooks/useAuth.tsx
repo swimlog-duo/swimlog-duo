@@ -6,10 +6,13 @@ import {
   setStoredActiveSlot,
   signInSlotAccount,
   signOutSlotAccount,
+  syncSlotMetaDisplayName,
   type VerifiedSessionContext,
 } from '../lib/authManager';
 import { isSupabaseConfigured } from '../lib/supabase';
+import type { UserRole } from '../types/database';
 import type { AccountSlot, SlotAccountMeta } from '../types/domain';
+import { normalizeDisplayName } from '../utils/displayName';
 import { useOnlineStatus } from './useOnlineStatus';
 
 interface AuthContextValue {
@@ -23,6 +26,12 @@ interface AuthContextValue {
   signIn: (slot: AccountSlot, email: string, password: string) => Promise<void>;
   signOutSlot: (slot: AccountSlot) => Promise<void>;
   refreshSession: () => Promise<void>;
+  updateSessionDisplayName: (
+    slot: AccountSlot,
+    userId: string,
+    role: UserRole,
+    displayName: string
+  ) => void;
   clearAuthError: () => void;
 }
 
@@ -56,7 +65,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await resolveSlotSessionDetailed(activeSlot, isOnline);
       if (seq !== resolveSeqRef.current) return;
-      setSession(res.session);
+      setSession((prev) => {
+        const next = res.session;
+        if (
+          prev &&
+          next &&
+          prev.slot === next.slot &&
+          prev.userId === next.userId &&
+          prev.role === next.role &&
+          prev.displayName === next.displayName &&
+          prev.offlineFallback === next.offlineFallback &&
+          prev.client === next.client
+        ) {
+          return prev;
+        }
+        return next;
+      });
       if (res.reauthRequiredReason) {
         setAuthError(res.reauthRequiredReason);
       }
@@ -130,6 +154,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [activeSlot, syncSlotMetasFromStorage]
   );
 
+  const updateSessionDisplayName = useCallback(
+    (slot: AccountSlot, userId: string, role: UserRole, displayName: string) => {
+      const normalized = normalizeDisplayName(displayName);
+      const updated = syncSlotMetaDisplayName(slot, userId, role, normalized);
+      syncSlotMetasFromStorage();
+      if (!updated) {
+        return;
+      }
+      setSession((prev) => {
+        if (!prev || prev.slot !== slot || prev.userId !== userId) {
+          return prev;
+        }
+        if (prev.displayName === normalized) return prev;
+        return { ...prev, displayName: normalized };
+      });
+    },
+    [syncSlotMetasFromStorage]
+  );
+
   const clearAuthError = useCallback(() => setAuthError(null), []);
 
   const contextValue = React.useMemo<AuthContextValue>(
@@ -144,6 +187,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signIn,
       signOutSlot,
       refreshSession,
+      updateSessionDisplayName,
       clearAuthError,
     }),
     [
@@ -157,6 +201,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signIn,
       signOutSlot,
       refreshSession,
+      updateSessionDisplayName,
       clearAuthError,
     ]
   );

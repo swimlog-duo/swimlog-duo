@@ -10,6 +10,7 @@ import {
   formatTimeMs,
   parseTimeInputToMs,
 } from '../../utils/swimCalculations';
+import { normalizeDisplayName } from '../../utils/displayName';
 
 export const PracticeLogDetailPage: React.FC = () => {
   const { dayId } = useParams<{ dayId: string }>();
@@ -42,7 +43,10 @@ export const PracticeLogDetailPage: React.FC = () => {
   const profileNameMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of dataset.profiles) {
-      map.set(p.id, `${p.display_name} (${p.role === 'coach' ? 'コーチ' : '選手'})`);
+      map.set(
+        p.id,
+        `${normalizeDisplayName(p.display_name ?? '') || '表示名未設定'} (${p.role === 'coach' ? 'コーチ' : '選手'})`
+      );
     }
     return map;
   }, [dataset.profiles]);

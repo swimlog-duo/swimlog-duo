@@ -22,7 +22,7 @@ export const LoginScreen: React.FC = () => {
   const isOnline = useOnlineStatus();
 
   const [selectedSlot, setSelectedSlot] = useState<AccountSlot>(activeSlot);
-  const [email, setEmail] = useState(() => slotMetas[activeSlot]?.email ?? '');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -32,7 +32,7 @@ export const LoginScreen: React.FC = () => {
 
   const handleSelectSlot = (slot: AccountSlot) => {
     setSelectedSlot(slot);
-    setEmail(slotMetas[slot]?.email ?? '');
+    setEmail('');
     setPassword('');
     setLocalError(null);
     clearAuthError();
@@ -131,7 +131,7 @@ export const LoginScreen: React.FC = () => {
                     )}
                   </div>
                   <div className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">
-                    {meta ? meta.displayName : '未ログイン'}
+                    {meta ? meta.displayName || '表示名未設定' : '未ログイン'}
                   </div>
                   {pending > 0 && (
                     <div className="mt-0.5 font-mono-num text-[11px] text-amber-700 dark:text-amber-300">
@@ -150,7 +150,7 @@ export const LoginScreen: React.FC = () => {
               onClick={() => void switchSlot(selectedSlot)}
               className="w-full min-h-[44px] rounded-xl border border-sky-600 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 dark:border-sky-500 dark:bg-sky-950/40 dark:text-sky-200"
             >
-              保持中の「{slotMetas[selectedSlot]?.displayName}」セッションで続行
+              保持中の「{slotMetas[selectedSlot]?.displayName || (selectedSlot === 'coach' ? 'コーチ（表示名未設定）' : '選手（表示名未設定）')}」セッションで続行
             </button>
           )}
         </div>

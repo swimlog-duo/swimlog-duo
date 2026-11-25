@@ -112,7 +112,7 @@ export const HomePage: React.FC = () => {
       <section className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div>
           <p className="text-xs font-semibold text-sky-700 dark:text-sky-400">
-            {isCoach ? 'コーチダッシュボード' : '選手ダッシュボード'} · {session?.displayName}
+            {isCoach ? 'コーチダッシュボード' : '選手ダッシュボード'} · {session?.displayName || '表示名未設定'}
           </p>
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-50">
             {isCoach ? '練習メニュー管理と選手フィードバック' : '今日の練習と記録入力'}

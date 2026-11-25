@@ -13,6 +13,7 @@ import {
   loadCachedDataset,
   loadIdMap,
   removeOutboxItem,
+  runWithCacheSnapshotLock,
   saveCachedDataset,
   saveIdMap,
   updateOutboxItem,
@@ -468,15 +469,20 @@ export async function runSyncForAccount(params: {
   }
 
   // Pull latest authorized server dataset and merge any un-synced local pending/conflict items on top
+  let serverSnapshot: AppDatasetSnapshot | null = null;
   try {
-    const serverSnapshot = await fetchAllDatasetFromServer(client, role);
-    const remainingOutbox = await listOutboxForOwner(userId);
-    workingDataset = applyOutboxOverlayToDataset(serverSnapshot, remainingOutbox);
+    serverSnapshot = await fetchAllDatasetFromServer(client, role);
   } catch {
     // Keep workingDataset cached if pull fails transiently
   }
 
-  await saveCachedDataset(userId, workingDataset);
+  await runWithCacheSnapshotLock(userId, async () => {
+    if (serverSnapshot) {
+      const remainingOutbox = await listOutboxForOwner(userId);
+      workingDataset = applyOutboxOverlayToDataset(serverSnapshot, remainingOutbox);
+    }
+    await saveCachedDataset(userId, workingDataset);
+  });
 
   return {
     syncedCount,

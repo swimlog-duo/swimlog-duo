@@ -1,6 +1,7 @@
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import type { ProfileRow, UserRole } from '../types/database';
 import type { AccountSlot, SlotAccountMeta } from '../types/domain';
+import { normalizeDisplayName } from '../utils/displayName';
 import { getSupabaseClient, isSupabaseConfigured } from './supabase';
 
 const ACTIVE_SLOT_KEY = 'swimlog-duo-active-slot';
@@ -25,14 +26,27 @@ export function getSlotMeta(slot: AccountSlot): SlotAccountMeta | null {
   const raw = window.localStorage.getItem(SLOT_META_KEYS[slot]);
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as SlotAccountMeta;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (
       parsed &&
       parsed.slot === slot &&
       typeof parsed.userId === 'string' &&
       (parsed.role === 'coach' || parsed.role === 'athlete')
     ) {
-      return parsed;
+      const rawName =
+        typeof parsed.displayName === 'string' ? normalizeDisplayName(parsed.displayName) : '';
+      const legacyEmail =
+        typeof parsed.email === 'string' ? normalizeDisplayName(parsed.email) : '';
+      const safeDisplayName =
+        legacyEmail.length > 0 && rawName === legacyEmail ? '' : rawName;
+      return {
+        slot,
+        userId: parsed.userId,
+        role: parsed.role,
+        displayName: safeDisplayName,
+        lastAuthenticatedAt:
+          typeof parsed.lastAuthenticatedAt === 'string' ? parsed.lastAuthenticatedAt : '',
+      };
     }
     return null;
   } catch {
@@ -43,6 +57,30 @@ export function getSlotMeta(slot: AccountSlot): SlotAccountMeta | null {
 function saveSlotMeta(meta: SlotAccountMeta): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(SLOT_META_KEYS[meta.slot], JSON.stringify(meta));
+}
+
+export function syncSlotMetaDisplayName(
+  slot: AccountSlot,
+  expectedUserId: string,
+  role: UserRole,
+  displayName: string
+): SlotAccountMeta | null {
+  const existing = getSlotMeta(slot);
+  if (!existing) {
+    return null;
+  }
+  if (existing.userId !== expectedUserId) {
+    throw new Error('セッション不整合のため表示名メタを更新できませんでした。');
+  }
+  const updated: SlotAccountMeta = {
+    slot,
+    userId: expectedUserId,
+    role,
+    displayName: normalizeDisplayName(displayName),
+    lastAuthenticatedAt: existing.lastAuthenticatedAt || new Date().toISOString(),
+  };
+  saveSlotMeta(updated);
+  return updated;
 }
 
 export function clearSlotMetaOnly(slot: AccountSlot): void {
@@ -56,7 +94,6 @@ export interface VerifiedSessionContext {
   userId: string;
   role: UserRole;
   displayName: string;
-  email: string;
   offlineFallback: boolean;
 }
 
@@ -107,8 +144,7 @@ export function isAuthSessionDefinitelyInvalid(err: unknown): boolean {
 function buildOfflineFallbackContext(
   slot: AccountSlot,
   client: SupabaseClient,
-  cachedMeta: SlotAccountMeta,
-  emailOverride?: string
+  cachedMeta: SlotAccountMeta
 ): VerifiedSessionContext {
   return {
     slot,
@@ -116,7 +152,6 @@ function buildOfflineFallbackContext(
     userId: cachedMeta.userId,
     role: cachedMeta.role,
     displayName: cachedMeta.displayName,
-    email: emailOverride ?? cachedMeta.email,
     offlineFallback: true,
   };
 }
@@ -167,12 +202,11 @@ export async function resolveSlotSessionDetailed(
     }
 
     const uid = session.user.id;
-    const email = session.user.email ?? cachedMeta?.email ?? '';
 
     if (!isOnline) {
       if (cachedMeta && cachedMeta.userId === uid && cachedMeta.role === slot) {
         return {
-          session: buildOfflineFallbackContext(slot, client, cachedMeta, email),
+          session: buildOfflineFallbackContext(slot, client, cachedMeta),
           reauthRequiredReason: null,
         };
       }
@@ -194,7 +228,7 @@ export async function resolveSlotSessionDetailed(
         cachedMeta.role === slot
       ) {
         return {
-          session: buildOfflineFallbackContext(slot, client, cachedMeta, email),
+          session: buildOfflineFallbackContext(slot, client, cachedMeta),
           reauthRequiredReason: null,
         };
       }
@@ -217,9 +251,8 @@ export async function resolveSlotSessionDetailed(
     const updatedMeta: SlotAccountMeta = {
       slot,
       userId: uid,
-      email,
       role: profile.role,
-      displayName: profile.display_name || email || slot,
+      displayName: normalizeDisplayName(profile.display_name ?? ''),
       lastAuthenticatedAt: new Date().toISOString(),
     };
     saveSlotMeta(updatedMeta);
@@ -231,7 +264,6 @@ export async function resolveSlotSessionDetailed(
         userId: uid,
         role: profile.role,
         displayName: updatedMeta.displayName,
-        email,
         offlineFallback: false,
       },
       reauthRequiredReason: null,
@@ -303,9 +335,8 @@ export async function signInSlotAccount(
   const meta: SlotAccountMeta = {
     slot,
     userId: data.user.id,
-    email: data.user.email ?? email.trim(),
     role: profile.role,
-    displayName: profile.display_name || data.user.email || slot,
+    displayName: normalizeDisplayName(profile.display_name ?? ''),
     lastAuthenticatedAt: new Date().toISOString(),
   };
 
@@ -318,7 +349,6 @@ export async function signInSlotAccount(
     userId: meta.userId,
     role: meta.role,
     displayName: meta.displayName,
-    email: meta.email,
     offlineFallback: false,
   };
 }
