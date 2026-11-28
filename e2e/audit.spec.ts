@@ -317,7 +317,7 @@ test.describe('SwimLog Duo 総合品質・デザイン監査 E2E', () => {
 
     await page.getByRole('button', { name: '練習記録を保存する' }).click();
     await expect(page).toHaveURL(/#\/logs\/day\//);
-    await expect(page.getByText('42:00.00')).toBeVisible();
+    await expect(page.getByText('42:00.00').first()).toBeVisible();
     await expect(page.getByText('キックのテンポを意識できた')).toBeVisible();
     await auditScreen(page, '10_AthleteLogDetail_Mobile', '10-athlete-log-detail-mobile.png');
 
@@ -590,6 +590,13 @@ test.describe('SwimLog Duo 総合品質・デザイン監査 E2E', () => {
     const savedBackupPath = path.join('/tmp/swimlog-pw-results', download.suggestedFilename());
     await download.saveAs(savedBackupPath);
     await page.locator('input[type="file"][accept="application/json"]').setInputFiles(savedBackupPath);
+    const restoreModal = page.getByRole('dialog', { name: 'バックアップ復元の確認' });
+    await expect(restoreModal).toBeVisible();
+    await expect(restoreModal.getByText('練習メニュー')).toBeVisible();
+    await expect(restoreModal.getByText('練習日')).toBeVisible();
+    await expect(restoreModal.getByText('未送信データ')).toBeVisible();
+    await expect(restoreModal.getByText('大会予定')).toBeVisible();
+    await restoreModal.getByRole('button', { name: '復元を実行' }).click();
     await expect(page.getByText(/バックアップを復元しました/)).toBeVisible();
 
     await expect(page.locator('html')).not.toHaveClass(/dark/);
@@ -725,7 +732,7 @@ test.describe('SwimLog Duo 総合品質・デザイン監査 E2E', () => {
     await page.locator('textarea').first().fill('テンポよく泳ぎ切ることができた');
     await page.getByRole('button', { name: '練習記録を保存する' }).click();
     await expect(page).toHaveURL(/#\/logs\/day\//);
-    await expect(page.getByText('38:30.00')).toBeVisible();
+    await expect(page.getByText('38:30.00').first()).toBeVisible();
     await expect(page.getByText('テンポよく泳ぎ切ることができた')).toBeVisible();
 
     // 6. コーチ側での練習記録確認（ヘッダータップで即座にコーチ枠へ切替）
@@ -734,7 +741,7 @@ test.describe('SwimLog Duo 総合品質・デザイン監査 E2E', () => {
     await page.getByRole('button', { name: '同期を実行' }).click();
     await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('練習記録').click();
     await page.locator('main a[href^="#/logs/day/"]').first().click();
-    await expect(page.getByText('38:30.00')).toBeVisible();
+    await expect(page.getByText('38:30.00').first()).toBeVisible();
     await expect(page.getByText('テンポよく泳ぎ切ることができた')).toBeVisible();
 
     // 7. コーチによるコメント投稿
@@ -754,6 +761,355 @@ test.describe('SwimLog Duo 総合品質・デザイン監査 E2E', () => {
     // 選手ホーム画面の「最新のコーチコメント」欄でも確認
     await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('ホーム').click();
     await expect(page.getByText('素晴らしいペース配分です！')).toBeVisible();
+
+    await assertCleanRuntime(consoleErrors, pageErrors, context);
+  });
+
+  test('9. メニュー数値プルダウン＋直接入力・保存エラー(42501)保持・設定からの再試行・選手共有連携', async ({
+    browser,
+  }) => {
+    const mock = new MockSupabaseServer({
+      athleteDisplayName: '田中 太郎',
+      coachDisplayName: '佐藤 コーチ',
+    });
+    // Simulate temporary permission error on menus INSERT
+    mock.failPostRules.push({
+      table: 'menus',
+      status: 403,
+      code: '42501',
+      message: 'permission denied for table menus',
+    });
+
+    const { context, page, consoleErrors, pageErrors } = await createMobilePage(browser, mock);
+
+    await page.goto('/');
+    await signInOnLoginScreen(page, 'coach', MOCK_COACH_EMAIL, MOCK_PASSWORD);
+    await expect(page.getByText('コーチダッシュボード · 佐藤 コーチ')).toBeVisible();
+
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('メニュー').click();
+    await page.getByRole('link', { name: '新規作成' }).click();
+    await expect(page.getByRole('heading', { name: '新しい練習メニューを作成' })).toBeVisible();
+
+    await page.locator('#menu-title').fill('2026-11-26 権限復旧テストメニュー');
+
+    // Use preset select for distance -> 200m, and direct numeric input for reps -> 6
+    await page.getByLabel('距離 (m)の候補を選択').first().selectOption('200');
+    const repsInput = page.locator('input[id$="-reps"]').first();
+    await repsInput.fill('6');
+    await repsInput.blur();
+    await expect(page.getByText('1,200m').first()).toBeVisible();
+
+    // Share immediately on save -> fails with 42501 on first attempt, must stay preserved locally!
+    await page.getByLabel('保存後に選手へ共有する').check();
+    await page.getByRole('button', { name: 'メニューを保存' }).click();
+
+    await expect(page.getByRole('heading', { name: '2026-11-26 権限復旧テストメニュー' })).toBeVisible();
+    await expect(page.getByText(/保存しました/)).toBeVisible();
+    await expect(page.getByText(/送信失敗/).first()).toBeVisible();
+
+    // Verify local backup also preserves unsynced menu before retry
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('設定').click();
+    await expect(page.getByText(/送信エラー（端末保存済み）/).first()).toBeVisible();
+
+    // Retry from Settings now that failPostRules is consumed -> sync succeeds in order
+    await page.getByRole('button', { name: '再試行' }).first().click();
+    await expect(page.getByText('未送信データはありません（すべてクラウドと同期済み）。')).toBeVisible();
+
+    // Athlete signs in and sees the shared menu with 200m x 6
+    await page.locator('header button').filter({ hasText: '佐藤 コーチ' }).click();
+    await signInOnLoginScreen(page, 'athlete', MOCK_ATHLETE_EMAIL, MOCK_PASSWORD);
+    await expect(page.locator('header button').filter({ hasText: '田中 太郎' })).toBeVisible();
+    await page.getByRole('button', { name: '同期を実行' }).click();
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('メニュー').click();
+    await expect(page.getByText('2026-11-26 権限復旧テストメニュー')).toBeVisible();
+
+    await assertCleanRuntime(consoleErrors, pageErrors, context);
+  });
+
+  test('10. サーバー保存直後の応答喪失（ACKロスト）からのリロード後冪等復旧 (23505)', async ({
+    browser,
+  }) => {
+    const mock = new MockSupabaseServer({
+      athleteDisplayName: '田中 太郎',
+      coachDisplayName: '佐藤 コーチ',
+    });
+    // Server commits menus INSERT then aborts the HTTP response before client receives ACK
+    mock.dropNextResponseAfterCommitForTable = 'menus';
+
+    const { context, page, consoleErrors, pageErrors } = await createMobilePage(browser, mock);
+
+    await page.goto('/');
+    await signInOnLoginScreen(page, 'coach', MOCK_COACH_EMAIL, MOCK_PASSWORD);
+    await expect(page.getByText('コーチダッシュボード · 佐藤 コーチ')).toBeVisible();
+
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('メニュー').click();
+    await page.getByRole('link', { name: '新規作成' }).click();
+    await page.locator('#menu-title').fill('2026-11-26 応答喪失リカバリー');
+    await page.getByRole('button', { name: 'メニューを保存' }).click();
+
+    await expect(page.getByRole('heading', { name: '2026-11-26 応答喪失リカバリー' })).toBeVisible();
+    // Reload page -> auto-sync reconciles/recovers via 23505 check without creating duplicate menus
+    await page.reload();
+    await page.getByRole('button', { name: '同期を実行' }).click();
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('設定').click();
+    await expect(page.getByText('未送信データはありません（すべてクラウドと同期済み）。')).toBeVisible();
+
+    // Verify Mock DB has original seeded menu (1) + recovered menu (1) = 2 menus (no duplicate)
+    expect(mock.state.menus).toHaveLength(2);
+    expect(
+      mock.state.menu_versions.filter((v) => v.title === '2026-11-26 応答喪失リカバリー')
+    ).toHaveLength(1);
+
+    await assertCleanRuntime(consoleErrors, pageErrors, context);
+  });
+
+  test('11. 選手による記録の論理削除（確認ダイアログ）＋コーチの予定vs実施比較＆履歴前後対比', async ({
+    browser,
+  }) => {
+    const mock = new MockSupabaseServer({
+      athleteDisplayName: '田中 太郎',
+      coachDisplayName: '佐藤 コーチ',
+    });
+    const { context, page, consoleErrors, pageErrors } = await createMobilePage(browser, mock);
+
+    await page.goto('/');
+    await signInOnLoginScreen(page, 'athlete', MOCK_ATHLETE_EMAIL, MOCK_PASSWORD);
+    await expect(page.getByText('選手ダッシュボード · 田中 太郎')).toBeVisible();
+
+    await page.getByRole('link', { name: '練習を記録する' }).click();
+    await page.locator('input[placeholder="31.45"]').first().fill('29.80');
+    await page.locator('input[placeholder="45:00"]').fill('40:00');
+    await page.locator('textarea').first().fill('初回記録');
+    await page.getByRole('button', { name: '練習記録を保存する' }).click();
+
+    await expect(page).toHaveURL(/#\/logs\/day\//);
+    await expect(page.getByText('コーチの予定距離')).toBeVisible();
+    await expect(page.getByText('記録済み 1/1セット')).toBeVisible();
+    await expect(page.getByText('実施済')).toBeVisible();
+
+    // Edit day note to produce history entry, then verify both 変更前: and 現在:
+    await page.getByRole('button', { name: '日次メモ編集' }).click();
+    await page.locator('textarea').first().fill('更新後の練習メモ');
+    await page.getByRole('button', { name: 'メモを保存' }).click();
+    await expect(page.getByText(/変更前:/)).toBeVisible();
+    await expect(page.getByText(/現在:.*更新後の練習メモ/)).toBeVisible();
+
+    // Athlete deletes the set result via confirmation modal
+    await page.getByRole('button', { name: '削除', exact: true }).click();
+    const deleteDialog = page.getByRole('dialog', { name: '記録の削除確認' });
+    await expect(deleteDialog).toBeVisible();
+    await expect(deleteDialog.getByText(/この操作は取り消せません/)).toBeVisible();
+    await deleteDialog.getByRole('button', { name: '削除を実行する' }).click();
+
+    await expect(page.getByText('記録済み 0/1セット')).toBeVisible();
+    await expect(page.getByText('未入力').first()).toBeVisible();
+
+    // Coach verifies planned-vs-actual & history state after sync
+    await page.locator('header button').filter({ hasText: '田中 太郎' }).click();
+    await signInOnLoginScreen(page, 'coach', MOCK_COACH_EMAIL, MOCK_PASSWORD);
+    await expect(page.locator('header button').filter({ hasText: '佐藤 コーチ' })).toBeVisible();
+    await page.getByRole('button', { name: '同期を実行' }).click();
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('練習記録').click();
+    await page.locator('main a[href^="#/logs/day/"]').first().click();
+
+    await expect(page.getByText('コーチの予定距離')).toBeVisible();
+    await expect(page.getByText('記録済み 0/1セット')).toBeVisible();
+    await expect(page.getByText(/現在:.*更新後の練習メモ/)).toBeVisible();
+
+    await assertCleanRuntime(consoleErrors, pageErrors, context);
+  });
+
+  test('12. レスポンシブ＆テーマ監査マトリクス (320px / 375px / 768px・ライト/ダーク・タップ領域)', async ({
+    browser,
+  }) => {
+    const mock = new MockSupabaseServer({
+      athleteDisplayName: '田中 太郎',
+      coachDisplayName: '佐藤 コーチ',
+    });
+    const { context, page, consoleErrors, pageErrors } = await createMobilePage(browser, mock);
+
+    await page.goto('/');
+    await signInOnLoginScreen(page, 'coach', MOCK_COACH_EMAIL, MOCK_PASSWORD);
+    await expect(page.getByText('コーチダッシュボード · 佐藤 コーチ')).toBeVisible();
+
+    const viewports = [
+      { name: 'xs320', width: 320, height: 568, scheme: 'light' as const },
+      { name: 'sm375', width: 375, height: 667, scheme: 'dark' as const },
+      { name: 'tablet768', width: 768, height: 1024, scheme: 'light' as const },
+    ];
+
+    for (const vp of viewports) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      await page.emulateMedia({ colorScheme: vp.scheme });
+
+      await page.goto('/#/');
+      await auditScreen(page, `Matrix_Home_${vp.name}_${vp.scheme}`, `matrix-home-${vp.name}.png`);
+
+      await page.goto('/#/menus/new');
+      await auditScreen(
+        page,
+        `Matrix_MenuNew_${vp.name}_${vp.scheme}`,
+        `matrix-menunew-${vp.name}.png`
+      );
+
+      await page.goto('/#/settings');
+      await auditScreen(
+        page,
+        `Matrix_Settings_${vp.name}_${vp.scheme}`,
+        `matrix-settings-${vp.name}.png`
+      );
+    }
+
+    await assertCleanRuntime(consoleErrors, pageErrors, context);
+  });
+
+  test('13. PracticeLogEditorPage の beforeunload 単一登録＆バックアップ復元後の自動同期再開', async ({
+    browser,
+  }) => {
+    const mock = new MockSupabaseServer({
+      athleteDisplayName: '田中 太郎',
+      coachDisplayName: '佐藤 コーチ',
+    });
+    const { context, page, consoleErrors, pageErrors } = await createMobilePage(browser, mock);
+
+    await page.addInitScript(() => {
+      const listeners = new Set<EventListenerOrEventListenerObject>();
+      const origAdd = window.addEventListener.bind(window);
+      const origRemove = window.removeEventListener.bind(window);
+      let preventDefaultCalls = 0;
+      const origPreventDefault = Event.prototype.preventDefault;
+      Event.prototype.preventDefault = function (...args) {
+        if (this.type === 'beforeunload') {
+          preventDefaultCalls += 1;
+        }
+        return origPreventDefault.apply(this, args);
+      };
+      (window as unknown as Record<string, unknown>).__e2eBeforeUnload = {
+        getStats: () => ({ active: listeners.size, preventDefaultCalls }),
+        resetPreventCount: () => {
+          preventDefaultCalls = 0;
+        },
+      };
+      window.addEventListener = function (
+        type: string,
+        listener: EventListenerOrEventListenerObject | null,
+        options?: boolean | AddEventListenerOptions
+      ) {
+        if (type === 'beforeunload' && listener) {
+          listeners.add(listener);
+        }
+        return origAdd(type, listener as EventListenerOrEventListenerObject, options);
+      } as typeof window.addEventListener;
+      window.removeEventListener = function (
+        type: string,
+        listener: EventListenerOrEventListenerObject | null,
+        options?: boolean | EventListenerOptions
+      ) {
+        if (type === 'beforeunload' && listener) {
+          listeners.delete(listener);
+        }
+        return origRemove(type, listener as EventListenerOrEventListenerObject, options);
+      } as typeof window.removeEventListener;
+    });
+
+    await page.goto('/');
+    await signInOnLoginScreen(page, 'athlete', MOCK_ATHLETE_EMAIL, MOCK_PASSWORD);
+    await expect(page.getByText('選手ダッシュボード · 田中 太郎')).toBeVisible();
+
+    type BeforeUnloadApi = {
+      getStats: () => { active: number; preventDefaultCalls: number };
+      resetPreventCount: () => void;
+    };
+    const baseline = await page.evaluate(() =>
+      (window as unknown as { __e2eBeforeUnload: BeforeUnloadApi }).__e2eBeforeUnload.getStats()
+    );
+
+    // Navigate to PracticeLogEditorPage -> must register strictly 1 additional beforeunload listener
+    await page.getByRole('link', { name: '練習を記録する' }).click();
+    await expect(page.getByRole('heading', { name: '練習日の登録' })).toBeVisible();
+
+    const onEditor = await page.evaluate(() =>
+      (window as unknown as { __e2eBeforeUnload: BeforeUnloadApi }).__e2eBeforeUnload.getStats()
+    );
+    expect(onEditor.active - baseline.active).toBe(1);
+
+    // Pristine state: dispatching beforeunload does not trigger preventDefault
+    await page.evaluate(() => {
+      const api = (window as unknown as { __e2eBeforeUnload: BeforeUnloadApi }).__e2eBeforeUnload;
+      api.resetPreventCount();
+      window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+    });
+    const pristineStats = await page.evaluate(() =>
+      (window as unknown as { __e2eBeforeUnload: BeforeUnloadApi }).__e2eBeforeUnload.getStats()
+    );
+    expect(pristineStats.preventDefaultCalls).toBe(0);
+
+    // Dirty state: preventDefault must run once (not twice!)
+    await page.locator('textarea').first().fill('未保存メモ');
+    const dirtyDispatch = await page.evaluate(() => {
+      const api = (window as unknown as { __e2eBeforeUnload: BeforeUnloadApi }).__e2eBeforeUnload;
+      api.resetPreventCount();
+      const ev = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(ev);
+      return {
+        defaultPrevented: ev.defaultPrevented,
+        preventDefaultCalls: api.getStats().preventDefaultCalls,
+      };
+    });
+    expect(dirtyDispatch.defaultPrevented).toBe(true);
+    expect(dirtyDispatch.preventDefaultCalls).toBe(1);
+
+    // Leave PracticeLogEditorPage -> listener count returns to baseline and dirty guard unmounts cleanly
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('設定').click();
+    await expect(page.getByRole('heading', { name: '設定', exact: true })).toBeVisible();
+    await page.waitForFunction(
+      (expectedActive) =>
+        (
+          window as unknown as { __e2eBeforeUnload: BeforeUnloadApi }
+        ).__e2eBeforeUnload.getStats().active === expectedActive,
+      baseline.active
+    );
+    const afterLeavePreventCalls = await page.evaluate(() => {
+      const api = (window as unknown as { __e2eBeforeUnload: BeforeUnloadApi }).__e2eBeforeUnload;
+      api.resetPreventCount();
+      window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+      return api.getStats().preventDefaultCalls;
+    });
+    expect(afterLeavePreventCalls).toBe(0);
+
+    // Export backup while server has 0 practice days
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'バックアップを保存' }).click();
+    const download = await downloadPromise;
+    const backupPath = path.join('/tmp/swimlog-pw-results', `e2e-resume-${download.suggestedFilename()}`);
+    await download.saveAs(backupPath);
+
+    // Add newer practice_day on server
+    mock.state.practice_days.push({
+      id: '77777777-7777-4777-8777-777777777799',
+      athlete_id: '22222222-2222-4222-8222-222222222222',
+      practice_date: '2026-11-26',
+      note: '復元後にサーバーから再取得される記録',
+      is_deleted: false,
+      revision: 1,
+      expected_revision: null,
+      created_by: '22222222-2222-4222-8222-222222222222',
+      created_at: '2026-11-26T01:00:00.000Z',
+      updated_by: null,
+      updated_at: '2026-11-26T01:00:00.000Z',
+    });
+
+    // Restore older backup while online & visible -> sync safely resumes and pulls newer server day
+    await page.locator('input[type="file"][accept="application/json"]').setInputFiles(backupPath);
+    const modal = page.getByRole('dialog', { name: 'バックアップ復元の確認' });
+    await expect(modal).toBeVisible();
+    await modal.getByRole('button', { name: '復元を実行' }).click();
+    await expect(page.getByText(/バックアップを復元しました/)).toBeVisible();
+
+    await page.getByRole('navigation', { name: 'モバイルナビゲーション' }).getByText('練習記録').click();
+    await expect(page.getByText('復元後にサーバーから再取得される記録')).toBeVisible({
+      timeout: 10_000,
+    });
 
     await assertCleanRuntime(consoleErrors, pageErrors, context);
   });

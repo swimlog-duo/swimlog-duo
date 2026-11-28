@@ -96,6 +96,13 @@ export class MockSupabaseServer {
   public state: MockDbState;
   public offlineBlocked = false;
   public rpcDelayMs = 0;
+  public failPostRules: Array<{
+    table: string;
+    status: number;
+    code: string;
+    message: string;
+  }> = [];
+  public dropNextResponseAfterCommitForTable: string | null = null;
   private seq = 100;
 
   constructor(options?: { athleteDisplayName?: string | null; coachDisplayName?: string | null }) {
@@ -399,8 +406,33 @@ export class MockSupabaseServer {
     }
 
     if (method === 'POST') {
+      const failIdx = this.failPostRules.findIndex((r) => r.table === tableName);
+      if (failIdx !== -1) {
+        const [rule] = this.failPostRules.splice(failIdx, 1);
+        await json(rule.status, { code: rule.code, message: rule.message });
+        return;
+      }
+
       const payload = (request.postDataJSON() as Record<string, unknown>) ?? {};
       const newId = typeof payload.id === 'string' && payload.id ? payload.id : makeUuid(++this.seq);
+
+      const existingRows = this.state[tableName] as Array<Record<string, unknown>>;
+      if (existingRows.some((r) => r.id === newId)) {
+        await json(409, {
+          code: '23505',
+          message: `duplicate key value violates unique constraint "${tableName}_pkey"`,
+        });
+        return;
+      }
+
+      const finishInsert = async (row: Record<string, unknown>) => {
+        if (this.dropNextResponseAfterCommitForTable === tableName) {
+          this.dropNextResponseAfterCommitForTable = null;
+          await route.abort('failed');
+          return;
+        }
+        await json(201, wantsObject ? row : [row]);
+      };
 
       if (tableName === 'menus') {
         if (callerRole !== 'coach') {
@@ -417,7 +449,7 @@ export class MockSupabaseServer {
           updated_at: nowIso,
         };
         this.state.menus.push(row);
-        await json(201, wantsObject ? row : [row]);
+        await finishInsert(row);
         return;
       }
 
@@ -441,7 +473,7 @@ export class MockSupabaseServer {
           created_at: nowIso,
         };
         this.state.menu_versions.push(row);
-        await json(201, wantsObject ? row : [row]);
+        await finishInsert(row);
         return;
       }
 
@@ -464,7 +496,7 @@ export class MockSupabaseServer {
           updated_at: nowIso,
         };
         this.state.practice_days.push(row);
-        await json(201, wantsObject ? row : [row]);
+        await finishInsert(row);
         return;
       }
 
@@ -491,7 +523,7 @@ export class MockSupabaseServer {
           updated_at: nowIso,
         };
         this.state.practice_entries.push(row);
-        await json(201, wantsObject ? row : [row]);
+        await finishInsert(row);
         return;
       }
 
@@ -517,7 +549,7 @@ export class MockSupabaseServer {
           updated_at: nowIso,
         };
         this.state.set_results.push(row);
-        await json(201, wantsObject ? row : [row]);
+        await finishInsert(row);
         return;
       }
 
@@ -536,7 +568,7 @@ export class MockSupabaseServer {
           created_at: nowIso,
         };
         this.state.coach_comments.push(row);
-        await json(201, wantsObject ? row : [row]);
+        await finishInsert(row);
         return;
       }
     }

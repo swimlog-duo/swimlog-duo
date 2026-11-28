@@ -9,11 +9,15 @@ import {
   Save,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { useSwimData } from '../../hooks/useSwimData';
+import type { BackupImportPreview } from '../../lib/offlineDb';
+import { getOutboxDependentItems } from '../../lib/outboxOverlay';
 import type { AccountSlot, OutboxItem, SwimlogBackupBundle } from '../../types/domain';
+import { formatIsoToJstDateTime, getTodayJst } from '../../utils/dateJst';
 import {
   DISPLAY_NAME_MAX_LENGTH,
   normalizeDisplayName,
@@ -58,13 +62,13 @@ function formatOutboxOpLabel(op: OutboxItem['operation']): string {
 function formatOutboxStatusLabel(status: OutboxItem['status']): string {
   switch (status) {
     case 'pending':
-      return '送信待ち';
+      return '送信待ち（端末保存済み）';
     case 'syncing':
       return '送信中';
     case 'conflict':
       return '競合（要確認）';
     case 'error':
-      return '送信エラー';
+      return '送信エラー（端末保存済み）';
     default:
       return '保留中';
   }
@@ -90,12 +94,15 @@ export const SettingsPage: React.FC = () => {
     isSyncing,
     isUpdatingProfile,
     lastSyncMessage,
+    errorItems,
     syncNow,
     updateMyDisplayName,
     retryErroredItem,
-    discardOutboxItem,
+    retryAllErroredItems,
+    discardOutboxWithDependents,
     saveCompetitionsList,
     exportJsonBackup,
+    previewJsonBackup,
     importJsonBackup,
   } = useSwimData();
 
@@ -107,7 +114,19 @@ export const SettingsPage: React.FC = () => {
   const [compDate, setCompDate] = useState('');
   const [compNote, setCompNote] = useState('');
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [pendingRestore, setPendingRestore] = useState<{
+    bundle: SwimlogBackupBundle;
+    preview: BackupImportPreview;
+  } | null>(null);
+  const [restoringBackup, setRestoringBackup] = useState(false);
+
   const [selectedConflict, setSelectedConflict] = useState<OutboxItem | null>(null);
+  const [pendingDiscardItem, setPendingDiscardItem] = useState<{
+    root: OutboxItem;
+    dependents: OutboxItem[];
+  } | null>(null);
+  const [discardingQueue, setDiscardingQueue] = useState(false);
 
   useEffect(() => {
     setProfileSaveMessage(null);
@@ -161,6 +180,7 @@ export const SettingsPage: React.FC = () => {
 
   const handleExportBackup = async () => {
     setBackupMessage(null);
+    setBackupError(null);
     try {
       const bundle = await exportJsonBackup();
       const blob = new Blob([JSON.stringify(bundle, null, 2)], {
@@ -169,34 +189,70 @@ export const SettingsPage: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `swimlog-duo-backup-${bundle.owner_role}-${new Date()
-        .toISOString()
-        .slice(0, 10)}.json`;
+      a.download = `swimlog-duo-backup-${bundle.owner_role}-${getTodayJst()}.json`;
       a.click();
       URL.revokeObjectURL(url);
       setBackupMessage('バックアップファイルを保存しました。');
     } catch (err) {
-      setBackupMessage(
+      setBackupError(
         err instanceof Error ? err.message : 'バックアップの保存に失敗しました。'
       );
     }
   };
 
-  const handleImportBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSelectBackupFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setBackupMessage(null);
+    setBackupError(null);
     try {
       const text = await file.text();
-      const bundle = JSON.parse(text) as SwimlogBackupBundle;
-      const res = await importJsonBackup(bundle);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error('バックアップファイル（JSON形式）の読み込みに失敗しました。');
+      }
+      const previewResult = await previewJsonBackup(parsed);
+      setPendingRestore(previewResult);
+    } catch (err) {
+      setBackupError(err instanceof Error ? err.message : 'ファイルの確認に失敗しました。');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleConfirmRestoreBackup = async () => {
+    if (!pendingRestore || restoringBackup) return;
+    setRestoringBackup(true);
+    setBackupError(null);
+    try {
+      const res = await importJsonBackup(pendingRestore.bundle);
+      setPendingRestore(null);
       setBackupMessage(
         `バックアップを復元しました（未送信データ ${res.importedOutboxCount}件）。`
       );
     } catch (err) {
-      setBackupMessage(err instanceof Error ? err.message : '復元に失敗しました。');
+      setBackupError(err instanceof Error ? err.message : '復元に失敗しました。');
+      setPendingRestore(null);
     } finally {
-      e.target.value = '';
+      setRestoringBackup(false);
+    }
+  };
+
+  const openDiscardConfirm = (item: OutboxItem) => {
+    const dependents = getOutboxDependentItems(outbox, item.queue_id);
+    setPendingDiscardItem({ root: item, dependents });
+  };
+
+  const handleConfirmDiscard = async () => {
+    if (!pendingDiscardItem || discardingQueue) return;
+    setDiscardingQueue(true);
+    try {
+      await discardOutboxWithDependents(pendingDiscardItem.root.queue_id);
+      setPendingDiscardItem(null);
+    } finally {
+      setDiscardingQueue(false);
     }
   };
 
@@ -366,20 +422,32 @@ export const SettingsPage: React.FC = () => {
               <p className="text-xs text-slate-500 dark:text-slate-400">{lastSyncMessage}</p>
             )}
           </div>
-          <button
-            type="button"
-            disabled={isSyncing || !isOnline}
-            onClick={() => void syncNow()}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
-          >
-            <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span>今すぐ同期する</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {errorItems.length > 1 && (
+              <button
+                type="button"
+                disabled={isSyncing || !isOnline}
+                onClick={() => void retryAllErroredItems()}
+                className="min-h-[44px] rounded-xl border border-amber-400 bg-amber-50 px-3.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-200"
+              >
+                すべて再試行
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={isSyncing || !isOnline}
+              onClick={() => void syncNow()}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a] dark:hover:bg-[#7dd3fc]"
+            >
+              <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>今すぐ同期する</span>
+            </button>
+          </div>
         </div>
 
         {outbox.length === 0 ? (
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            未送信データはありません（すべて同期済み）。
+            未送信データはありません（すべてクラウドと同期済み）。
           </p>
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -388,16 +456,18 @@ export const SettingsPage: React.FC = () => {
                 key={item.queue_id}
                 className="py-3 flex flex-wrap items-center justify-between gap-2 text-xs"
               >
-                <div className="space-y-0.5">
+                <div className="space-y-0.5 min-w-0 flex-1">
                   <div className="font-bold text-[#0b1f3a] dark:text-slate-100">
                     {formatOutboxTableLabel(item.table_name)} · {formatOutboxOpLabel(item.operation)} ·{' '}
                     {formatOutboxStatusLabel(item.status)}
                   </div>
                   {item.last_error && (
-                    <div className="text-rose-600 dark:text-rose-400">{item.last_error}</div>
+                    <div className="text-rose-600 dark:text-rose-400 break-words">
+                      {item.last_error}
+                    </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   {item.status === 'conflict' && (
                     <button
                       type="button"
@@ -411,15 +481,16 @@ export const SettingsPage: React.FC = () => {
                   {item.status === 'error' && (
                     <button
                       type="button"
+                      disabled={isSyncing || !isOnline}
                       onClick={() => void retryErroredItem(item)}
-                      className="min-h-[44px] rounded-xl border border-slate-300 px-3.5 font-semibold dark:border-slate-700"
+                      className="min-h-[44px] rounded-xl border border-slate-300 px-3.5 font-semibold disabled:opacity-50 dark:border-slate-700"
                     >
                       再試行
                     </button>
                   )}
                   <button
                     type="button"
-                    onClick={() => void discardOutboxItem(item.queue_id)}
+                    onClick={() => openDiscardConfirm(item)}
                     aria-label="未送信データを削除"
                     className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100 hover:text-rose-600 dark:hover:bg-slate-800"
                   >
@@ -439,9 +510,14 @@ export const SettingsPage: React.FC = () => {
             データのバックアップ・復元
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            未送信の記録や大会予定をファイルに保存し、必要なときに復元できます。
+            未送信の記録や大会予定をファイルに保存し、内容を確認したうえで安全に復元できます。
           </p>
         </div>
+        {backupError && (
+          <p role="alert" className="text-xs font-semibold text-rose-600 dark:text-rose-400">
+            {backupError}
+          </p>
+        )}
         {backupMessage && (
           <p className="text-xs font-semibold text-[#0077b6] dark:text-[#38bdf8]">
             {backupMessage}
@@ -462,7 +538,7 @@ export const SettingsPage: React.FC = () => {
             <input
               type="file"
               accept="application/json"
-              onChange={handleImportBackup}
+              onChange={handleSelectBackupFile}
               className="hidden"
             />
           </label>
@@ -562,6 +638,188 @@ export const SettingsPage: React.FC = () => {
           </div>
         )}
       </section>
+
+      {/* Discard Unsent Item Confirmation Modal */}
+      {pendingDiscardItem && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="discard-queue-modal-title"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-[#0e1b2e] space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3
+                id="discard-queue-modal-title"
+                className="text-base font-bold text-[#0b1f3a] dark:text-slate-50"
+              >
+                未送信データの削除確認
+              </h3>
+              <button
+                type="button"
+                aria-label="閉じる"
+                onClick={() => setPendingDiscardItem(null)}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs text-slate-700 dark:text-slate-300">
+              <p className="font-semibold text-rose-700 dark:text-rose-300">
+                この操作は取り消せません。クラウド未送信の下書きデータも端末から完全に削除されます。
+              </p>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-[#07111e]">
+                <div className="font-bold text-[#0b1f3a] dark:text-slate-100">
+                  対象: {formatOutboxTableLabel(pendingDiscardItem.root.table_name)} ·{' '}
+                  {formatOutboxOpLabel(pendingDiscardItem.root.operation)}
+                </div>
+                {pendingDiscardItem.dependents.length > 0 && (
+                  <div className="mt-2 space-y-1 text-amber-800 dark:text-amber-300">
+                    <p className="font-semibold">
+                      関連する未送信データ（{pendingDiscardItem.dependents.length}件）も同時に削除されます：
+                    </p>
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {pendingDiscardItem.dependents.map((dep) => (
+                        <li key={dep.queue_id}>
+                          {formatOutboxTableLabel(dep.table_name)}（{formatOutboxOpLabel(dep.operation)}）
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+              <button
+                type="button"
+                disabled={discardingQueue}
+                onClick={() => setPendingDiscardItem(null)}
+                className="min-h-[44px] rounded-xl border border-slate-300 px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={discardingQueue}
+                onClick={() => void handleConfirmDiscard()}
+                className="min-h-[44px] rounded-xl bg-rose-600 px-4 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {discardingQueue
+                  ? '削除中...'
+                  : pendingDiscardItem.dependents.length > 0
+                  ? `関連データごと削除（${pendingDiscardItem.dependents.length + 1}件）`
+                  : 'この未送信データを削除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Backup Restore Preview & Confirmation Modal */}
+      {pendingRestore && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="backup-preview-modal-title"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4"
+        >
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200/80 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-[#0e1b2e] space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3
+                id="backup-preview-modal-title"
+                className="text-base font-bold text-[#0b1f3a] dark:text-slate-50"
+              >
+                バックアップ復元の確認
+              </h3>
+              <button
+                type="button"
+                aria-label="閉じる"
+                onClick={() => setPendingRestore(null)}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-700 dark:text-slate-300">
+              <p>
+                作成日時（日本時間）:{' '}
+                <strong className="font-mono-num">
+                  {formatIsoToJstDateTime(pendingRestore.preview.exportedAt)}
+                </strong>
+              </p>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-[#07111e] text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">項目</th>
+                      <th className="px-3 py-2 font-semibold text-right">現在の端末</th>
+                      <th className="px-3 py-2 font-semibold text-right">バックアップ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono-num">
+                    <tr>
+                      <td className="px-3 py-2 font-sans">練習メニュー</td>
+                      <td className="px-3 py-2 text-right">{pendingRestore.preview.currentCounts.menus}件</td>
+                      <td className="px-3 py-2 text-right font-bold">{pendingRestore.preview.backupCounts.menus}件</td>
+                    </tr>
+                    <tr>
+                      <td className="px-3 py-2 font-sans">練習日</td>
+                      <td className="px-3 py-2 text-right">{pendingRestore.preview.currentCounts.practiceDays}件</td>
+                      <td className="px-3 py-2 text-right font-bold">{pendingRestore.preview.backupCounts.practiceDays}件</td>
+                    </tr>
+                    <tr>
+                      <td className="px-3 py-2 font-sans">未送信データ</td>
+                      <td className="px-3 py-2 text-right">{pendingRestore.preview.currentCounts.outbox}件</td>
+                      <td className="px-3 py-2 text-right font-bold">{pendingRestore.preview.backupCounts.outbox}件</td>
+                    </tr>
+                    <tr>
+                      <td className="px-3 py-2 font-sans">大会予定</td>
+                      <td className="px-3 py-2 text-right">{pendingRestore.preview.currentCounts.competitions}件</td>
+                      <td className="px-3 py-2 text-right font-bold">{pendingRestore.preview.backupCounts.competitions}件</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {pendingRestore.preview.protectedLocalOutboxCount > 0 && (
+                <p className="rounded-xl border border-sky-200 bg-sky-50 p-2.5 text-[#0b1f3a] dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-100">
+                  現在の端末に残っている未送信データ（{pendingRestore.preview.protectedLocalOutboxCount}件）は消さずに保護されます。
+                </p>
+              )}
+
+              {pendingRestore.preview.conflictingQueueIds.length > 0 && (
+                <p className="rounded-xl border border-rose-300 bg-rose-50 p-2.5 font-semibold text-rose-800 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
+                  注意: 現在の端末の未送信データと内容が異なる項目が{' '}
+                  {pendingRestore.preview.conflictingQueueIds.length} 件あるため、データ保護のため復元を実行すると中止されます。
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+              <button
+                type="button"
+                disabled={restoringBackup}
+                onClick={() => setPendingRestore(null)}
+                className="min-h-[44px] rounded-xl border border-slate-300 px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={restoringBackup}
+                onClick={() => void handleConfirmRestoreBackup()}
+                className="min-h-[44px] rounded-xl bg-[#0077b6] px-4 text-xs font-semibold text-white hover:bg-[#005f92] disabled:opacity-50 dark:bg-[#38bdf8] dark:text-[#0b1f3a]"
+              >
+                {restoringBackup ? '復元中...' : '復元を実行'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedConflict && (
         <ConflictResolverModal

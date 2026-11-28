@@ -8,6 +8,11 @@ import {
   parseTimeInputToMs,
   validateMenuVersionInput,
 } from '../utils/swimCalculations';
+import {
+  formatIsoToJstDateTime,
+  formatYmdWithWeekdayJst,
+  getDaysUntilJst,
+} from '../utils/dateJst';
 
 function makeRow(overrides: Partial<MenuItemRow> = {}): MenuItemRow {
   return {
@@ -109,5 +114,12 @@ describe('swimCalculations', () => {
     expect(parseTimeInputToMs('1:23.45')).toBe(83450);
     expect(formatTimeMs(83450)).toBe('1:23.45');
     expect(formatTimeMs(31450)).toBe('31.45');
+  });
+
+  it('formats JST dates/times/weekdays and computes positive competition countdowns', () => {
+    expect(getDaysUntilJst('2026-12-20', '2026-11-26')).toBe(24);
+    expect(getDaysUntilJst('2026-11-26', '2026-11-26')).toBe(0);
+    expect(formatYmdWithWeekdayJst('2026-11-26')).toBe('2026-11-26 (木)');
+    expect(formatIsoToJstDateTime('2026-11-26T00:00:00.000Z')).toBe('2026-11-26 09:00');
   });
 });

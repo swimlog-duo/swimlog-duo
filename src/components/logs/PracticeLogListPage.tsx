@@ -3,15 +3,18 @@ import { Link } from 'react-router-dom';
 import { Calendar, ChevronRight, Plus } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useSwimData } from '../../hooks/useSwimData';
+import { getRecordSyncState } from '../../lib/outboxOverlay';
+import { formatYmdWithWeekdayJst } from '../../utils/dateJst';
 import {
   calculateMenuMetrics,
   formatDistanceM,
   formatTimeMs,
 } from '../../utils/swimCalculations';
+import { SyncStatusBadge } from '../sync/SyncStatusBadge';
 
 export const PracticeLogListPage: React.FC = () => {
   const { session } = useAuth();
-  const { dataset } = useSwimData();
+  const { dataset, outbox } = useSwimData();
   const isAthlete = session?.role === 'athlete';
 
   const versionById = useMemo(() => {
@@ -82,6 +85,14 @@ export const PracticeLogListPage: React.FC = () => {
         <div className="space-y-3">
           {days.map((day) => {
             const entries = entriesByDay.get(day.id) ?? [];
+            const setIds = dataset.set_results
+              .filter((s) => entries.some((e) => e.id === s.entry_id))
+              .map((s) => s.id);
+            const daySyncInfo = getRecordSyncState(outbox, [
+              day.id,
+              ...entries.map((e) => e.id),
+              ...setIds,
+            ]);
             const totalDistance = entries.reduce((sum, e) => {
               const ver = versionById.get(e.menu_version_id);
               return (
@@ -96,10 +107,13 @@ export const PracticeLogListPage: React.FC = () => {
                 to={`/logs/day/${day.id}`}
                 className="block rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:border-[#0077b6] dark:border-slate-800/80 dark:bg-[#0e1b2e] dark:hover:border-[#38bdf8]"
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 font-mono-num text-base font-bold text-[#0b1f3a] dark:text-slate-50">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2 font-mono-num text-base font-bold text-[#0b1f3a] dark:text-slate-50">
                     <Calendar className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
-                    <span>{day.practice_date}</span>
+                    <span>{formatYmdWithWeekdayJst(day.practice_date)}</span>
+                    {daySyncInfo.state !== 'synced' && (
+                      <SyncStatusBadge state={daySyncInfo.state} compact />
+                    )}
                   </div>
                   <div className="flex items-center gap-2 font-mono-num text-sm font-bold text-[#0077b6] dark:text-[#38bdf8]">
                     <span>{formatDistanceM(totalDistance)}</span>

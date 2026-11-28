@@ -15,8 +15,10 @@ export const OfflineSyncBanner: React.FC = () => {
     errorItems,
     isSyncing,
     lastSyncMessage,
+    lastSyncKind,
     syncNow,
     retryErroredItem,
+    retryAllErroredItems,
   } = useSwimData();
   const [activeConflict, setActiveConflict] = useState<OutboxItem | null>(null);
 
@@ -25,7 +27,8 @@ export const OfflineSyncBanner: React.FC = () => {
     session?.offlineFallback ||
     pendingCount > 0 ||
     conflictItems.length > 0 ||
-    errorItems.length > 0;
+    errorItems.length > 0 ||
+    (lastSyncMessage !== null && lastSyncKind === 'error');
 
   if (!showBanner) return null;
 
@@ -57,7 +60,7 @@ export const OfflineSyncBanner: React.FC = () => {
                 }`}
               />
               <span>
-                未送信のデータが <strong className="font-mono-num">{pendingCount}</strong> 件あります。
+                未送信のデータが <strong className="font-mono-num">{pendingCount}</strong> 件あります（端末に保存済み）。
               </span>
             </div>
             <button
@@ -96,17 +99,33 @@ export const OfflineSyncBanner: React.FC = () => {
 
         {errorItems.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200">
-            <div className="space-y-0.5">
-              <p className="font-semibold">同期に失敗したデータがあります（{errorItems.length}件）</p>
-              <p className="text-xs">{errorItems[0].last_error}</p>
+            <div className="space-y-0.5 min-w-0 flex-1">
+              <p className="font-semibold">
+                送信に失敗したデータがあります（{errorItems.length}件 · 端末に保存済み）
+              </p>
+              <p className="text-xs break-words">{errorItems[0].last_error}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => void retryErroredItem(errorItems[0])}
-              className="min-h-[44px] rounded-xl border border-amber-400 bg-white px-4 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-700 dark:bg-[#0e1b2e] dark:text-amber-200"
-            >
-              再試行
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {errorItems.length > 1 ? (
+                <button
+                  type="button"
+                  disabled={isSyncing || !isOnline}
+                  onClick={() => void retryAllErroredItems()}
+                  className="min-h-[44px] rounded-xl border border-amber-400 bg-white px-4 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-[#0e1b2e] dark:text-amber-200"
+                >
+                  すべて再試行
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={isSyncing || !isOnline}
+                  onClick={() => void retryErroredItem(errorItems[0])}
+                  className="min-h-[44px] rounded-xl border border-amber-400 bg-white px-4 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-700 dark:bg-[#0e1b2e] dark:text-amber-200"
+                >
+                  再試行
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -115,9 +134,9 @@ export const OfflineSyncBanner: React.FC = () => {
           pendingCount === 0 &&
           conflictItems.length === 0 &&
           errorItems.length === 0 &&
-          session?.offlineFallback && (
+          (session?.offlineFallback || lastSyncKind === 'error') && (
             <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-700 dark:border-[#1e3250] dark:bg-[#0e1b2e] dark:text-slate-300">
-              <CheckCircle2 className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
+              <CheckCircle2 className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8] shrink-0" />
               <span>{lastSyncMessage}</span>
             </div>
           )}

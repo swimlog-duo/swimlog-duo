@@ -19,6 +19,114 @@ import {
   validateMenuVersionInput,
 } from '../../utils/swimCalculations';
 
+const DISTANCE_PRESETS = [25, 50, 75, 100, 150, 200, 300, 400, 500, 800, 1000, 1500];
+const REPS_PRESETS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20];
+const SETS_PRESETS = [1, 2, 3, 4, 5, 6, 8, 10];
+
+interface PresetOrNumericFieldProps {
+  id: string;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  unit: string;
+  presets: number[];
+  onChange: (next: number) => void;
+}
+
+const PresetOrNumericField: React.FC<PresetOrNumericFieldProps> = ({
+  id,
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  unit,
+  presets,
+  onChange,
+}) => {
+  const [draft, setDraft] = useState<string>(String(value));
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) {
+      setDraft(String(value));
+    }
+  }, [value, isFocused]);
+
+  const isPreset = presets.includes(value);
+
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+      >
+        {label}
+      </label>
+      <div className="mt-1 grid grid-cols-2 gap-1.5">
+        <select
+          aria-label={`${label}の候補を選択`}
+          value={isPreset ? String(value) : 'custom'}
+          onChange={(e) => {
+            if (e.target.value === 'custom') {
+              const el = document.getElementById(id) as HTMLInputElement | null;
+              el?.focus();
+              el?.select();
+              return;
+            }
+            const nextVal = Number(e.target.value);
+            setDraft(String(nextVal));
+            onChange(nextVal);
+          }}
+          className="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2 text-base sm:text-xs font-mono-num dark:border-slate-700 dark:bg-[#07111e]"
+        >
+          {presets.map((p) => (
+            <option key={p} value={String(p)}>
+              {p}
+              {unit}
+            </option>
+          ))}
+          <option value="custom">直接入力</option>
+        </select>
+        <input
+          id={id}
+          type="number"
+          inputMode="numeric"
+          min={min}
+          max={max}
+          step={step}
+          value={draft}
+          onFocus={() => setIsFocused(true)}
+          onChange={(e) => {
+            const raw = e.target.value;
+            setDraft(raw);
+            if (raw.trim() === '') return;
+            const parsed = Number(raw);
+            if (Number.isFinite(parsed) && parsed >= min) {
+              onChange(Math.min(max, Math.floor(parsed)));
+            }
+          }}
+          onBlur={() => {
+            setIsFocused(false);
+            const parsed = Number(draft);
+            const clamped =
+              Number.isFinite(parsed) && draft.trim() !== ''
+                ? Math.max(min, Math.min(max, Math.floor(parsed)))
+                : value;
+            setDraft(String(clamped));
+            if (clamped !== value) {
+              onChange(clamped);
+            }
+          }}
+          className="w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
+        />
+      </div>
+    </div>
+  );
+};
+
 function makeEmptyRow(): MenuItemRow {
   return {
     id: createRowId(),
@@ -156,6 +264,17 @@ export const MenuEditorPage: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [userId, isCoach, draftKey, title, rows]);
 
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if ((isDirtyRef.current || submittingRef.current) && !submittedRef.current) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
   const metrics = useMemo(() => calculateMenuMetrics(rows), [rows]);
   const validation = useMemo(() => validateMenuVersionInput(title, rows), [title, rows]);
 
@@ -218,7 +337,9 @@ export const MenuEditorPage: React.FC = () => {
         submittedRef.current = true;
         isDirtyRef.current = false;
         if (userId) await deleteDraft(userId, draftKey);
-        navigate(`/menus/${menuId}`);
+        navigate(`/menus/${menuId}`, {
+          state: { saveNotice: '新しいバージョンを保存しました。' },
+        });
       } else {
         const newId = await createMenu({
           title,
@@ -228,7 +349,9 @@ export const MenuEditorPage: React.FC = () => {
         submittedRef.current = true;
         isDirtyRef.current = false;
         if (userId) await deleteDraft(userId, draftKey);
-        navigate(`/menus/${newId}`);
+        navigate(`/menus/${newId}`, {
+          state: { saveNotice: '練習メニューを保存しました。' },
+        });
       }
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : '保存に失敗しました。');
@@ -285,7 +408,7 @@ export const MenuEditorPage: React.FC = () => {
               setTitle(e.target.value);
             }}
             placeholder="例: 2026-11-23 朝練 スピード持久"
-            className="mt-1.5 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm text-[#0b1f3a] focus:border-[#0077b6] focus:outline-none dark:border-slate-700 dark:bg-[#07111e] dark:text-slate-100"
+            className="mt-1.5 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-base sm:text-sm text-[#0b1f3a] focus:border-[#0077b6] focus:outline-none dark:border-slate-700 dark:bg-[#07111e] dark:text-slate-100"
           />
         </div>
 
@@ -375,169 +498,148 @@ export const MenuEditorPage: React.FC = () => {
               </div>
 
               {!row.is_group_header && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-block`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      練習タイプ
-                    </label>
-                    <select
-                      id={`${idBase}-block`}
-                      value={row.block_type}
-                      onChange={(e) => updateRow(index, { block_type: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-[#07111e]"
-                    >
-                      {BLOCK_TYPES.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-3 gap-2.5">
+                    <div>
+                      <label
+                        htmlFor={`${idBase}-block`}
+                        className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                      >
+                        練習タイプ
+                      </label>
+                      <select
+                        id={`${idBase}-block`}
+                        value={row.block_type}
+                        onChange={(e) => updateRow(index, { block_type: e.target.value })}
+                        className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      >
+                        {BLOCK_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor={`${idBase}-stroke`}
+                        className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                      >
+                        種目
+                      </label>
+                      <select
+                        id={`${idBase}-stroke`}
+                        value={row.stroke}
+                        onChange={(e) => updateRow(index, { stroke: e.target.value })}
+                        className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      >
+                        {STROKE_TYPES.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor={`${idBase}-intensity`}
+                        className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                      >
+                        強度
+                      </label>
+                      <select
+                        id={`${idBase}-intensity`}
+                        value={row.intensity}
+                        onChange={(e) => updateRow(index, { intensity: e.target.value })}
+                        className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      >
+                        {INTENSITY_LEVELS.map((lvl) => (
+                          <option key={lvl} value={lvl}>
+                            {lvl}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-stroke`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      種目
-                    </label>
-                    <select
-                      id={`${idBase}-stroke`}
-                      value={row.stroke}
-                      onChange={(e) => updateRow(index, { stroke: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-[#07111e]"
-                    >
-                      {STROKE_TYPES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-intensity`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      強度
-                    </label>
-                    <select
-                      id={`${idBase}-intensity`}
-                      value={row.intensity}
-                      onChange={(e) => updateRow(index, { intensity: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 text-sm dark:border-slate-700 dark:bg-[#07111e]"
-                    >
-                      {INTENSITY_LEVELS.map((lvl) => (
-                        <option key={lvl} value={lvl}>
-                          {lvl}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-distance`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      距離 (m)
-                    </label>
-                    <input
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <PresetOrNumericField
                       id={`${idBase}-distance`}
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      step={25}
+                      label="距離 (m)"
                       value={row.distance_m}
-                      onChange={(e) =>
-                        updateRow(index, { distance_m: Math.max(0, Number(e.target.value)) })
-                      }
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-reps`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      回数 (t)
-                    </label>
-                    <input
-                      id={`${idBase}-reps`}
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      value={row.reps}
-                      onChange={(e) =>
-                        updateRow(index, { reps: Math.max(1, Number(e.target.value)) })
-                      }
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-sets`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      セット数 (s)
-                    </label>
-                    <input
-                      id={`${idBase}-sets`}
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      value={row.sets}
-                      onChange={(e) =>
-                        updateRow(index, { sets: Math.max(1, Number(e.target.value)) })
-                      }
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-circle`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      サークル
-                    </label>
-                    <input
-                      id={`${idBase}-circle`}
-                      type="text"
-                      value={row.circle}
-                      onChange={(e) => updateRow(index, { circle: e.target.value })}
-                      placeholder="1:30"
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
-                    />
-                  </div>
-
-                  <div>
-                    <label
-                      htmlFor={`${idBase}-hr`}
-                      className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
-                    >
-                      目標心拍 (HR)
-                    </label>
-                    <input
-                      id={`${idBase}-hr`}
-                      type="number"
-                      inputMode="numeric"
                       min={0}
-                      value={row.hr ?? ''}
-                      onChange={(e) =>
-                        updateRow(index, {
-                          hr: e.target.value ? Number(e.target.value) : null,
-                        })
-                      }
-                      placeholder="160"
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      max={10000}
+                      step={25}
+                      unit="m"
+                      presets={DISTANCE_PRESETS}
+                      onChange={(nextVal) => updateRow(index, { distance_m: nextVal })}
                     />
+
+                    <PresetOrNumericField
+                      id={`${idBase}-reps`}
+                      label="回数 (t)"
+                      value={row.reps}
+                      min={1}
+                      max={200}
+                      unit="t"
+                      presets={REPS_PRESETS}
+                      onChange={(nextVal) => updateRow(index, { reps: nextVal })}
+                    />
+
+                    <PresetOrNumericField
+                      id={`${idBase}-sets`}
+                      label="セット数 (s)"
+                      value={row.sets}
+                      min={1}
+                      max={50}
+                      unit="s"
+                      presets={SETS_PRESETS}
+                      onChange={(nextVal) => updateRow(index, { sets: nextVal })}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label
+                        htmlFor={`${idBase}-circle`}
+                        className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                      >
+                        サークル
+                      </label>
+                      <input
+                        id={`${idBase}-circle`}
+                        type="text"
+                        value={row.circle}
+                        onChange={(e) => updateRow(index, { circle: e.target.value })}
+                        placeholder="1:30"
+                        className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor={`${idBase}-hr`}
+                        className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400"
+                      >
+                        目標心拍 (HR)
+                      </label>
+                      <input
+                        id={`${idBase}-hr`}
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        value={row.hr ?? ''}
+                        onChange={(e) =>
+                          updateRow(index, {
+                            hr: e.target.value ? Number(e.target.value) : null,
+                          })
+                        }
+                        placeholder="160"
+                        className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-2.5 font-mono-num text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -558,7 +660,7 @@ export const MenuEditorPage: React.FC = () => {
                     placeholder={
                       row.is_group_header ? '例: Main Set' : '例: 後半ビルドアップ'
                     }
-                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
                   />
                 </div>
                 <div>
@@ -574,7 +676,7 @@ export const MenuEditorPage: React.FC = () => {
                     value={row.free_text}
                     onChange={(e) => updateRow(index, { free_text: e.target.value })}
                     placeholder="補足メモ（任意）"
-                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
                   />
                 </div>
               </div>

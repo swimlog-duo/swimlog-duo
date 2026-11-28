@@ -1,9 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { Archive, Edit3, Eye, EyeOff, Printer } from 'lucide-react';
+import { Link, useLocation, useParams } from 'react-router-dom';
+import { Archive, CheckCircle2, Edit3, Eye, EyeOff, Printer } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useSwimData } from '../../hooks/useSwimData';
+import { getRecordSyncState } from '../../lib/outboxOverlay';
 import type { MenuStatusHistoryRow } from '../../types/database';
+import { formatIsoToJstDate, formatIsoToJstDateTime } from '../../utils/dateJst';
 import {
   calculateMenuMetrics,
   computeRowDistance,
@@ -11,6 +13,7 @@ import {
   formatDistanceM,
   formatMenuStatusLabel,
 } from '../../utils/swimCalculations';
+import { SyncStatusBadge } from '../sync/SyncStatusBadge';
 
 function formatStateSnapshot(isShared: boolean, isArchived: boolean): string {
   if (isArchived) return 'アーカイブ';
@@ -25,9 +28,13 @@ function formatStatusTransition(h: MenuStatusHistoryRow): string {
 
 export const MenuDetailPrintPage: React.FC = () => {
   const { menuId } = useParams<{ menuId: string }>();
+  const location = useLocation();
   const { session } = useAuth();
-  const { dataset, updateMenuStatus } = useSwimData();
+  const { dataset, outbox, updateMenuStatus } = useSwimData();
   const isCoach = session?.role === 'coach';
+
+  const saveNotice =
+    (location.state as { saveNotice?: string } | null)?.saveNotice ?? null;
 
   const menu = useMemo(
     () => dataset.menus.find((m) => m.id === menuId) ?? null,
@@ -60,6 +67,14 @@ export const MenuDetailPrintPage: React.FC = () => {
             .sort((a, b) => b.changed_at.localeCompare(a.changed_at))
         : [],
     [isCoach, dataset.menu_status_history, menuId]
+  );
+
+  const syncInfo = useMemo(
+    () =>
+      menu
+        ? getRecordSyncState(outbox, [menu.id, ...versions.map((v) => v.id)])
+        : { state: 'synced' as const, items: [], errorMessage: null },
+    [menu, outbox, versions]
   );
 
   if (!menu || !activeVersion) {
@@ -96,6 +111,30 @@ export const MenuDetailPrintPage: React.FC = () => {
         </div>
       )}
 
+      {(saveNotice || syncInfo.state !== 'synced') && (
+        <div
+          className={`no-print flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 text-xs font-semibold ${
+            syncInfo.state === 'error'
+              ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200'
+              : syncInfo.state === 'pending' || syncInfo.state === 'syncing'
+              ? 'border-sky-200 bg-sky-50 text-[#0b1f3a] dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-100'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>
+              {syncInfo.state === 'error'
+                ? 'この端末に保存済みですが、クラウドへの送信に失敗しました。上部の「再試行」からお試しください。'
+                : syncInfo.state === 'pending' || syncInfo.state === 'syncing'
+                ? `${saveNotice ?? '変更を保存しました。'}（この端末に保存済み・クラウドへ送信中）`
+                : saveNotice ?? 'クラウドと同期済みです。'}
+            </span>
+          </div>
+          <SyncStatusBadge state={syncInfo.state} compact />
+        </div>
+      )}
+
       {/* Control Toolbar (Hidden in Print) */}
       <div className="no-print flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e]">
         <div className="flex flex-wrap items-center gap-2">
@@ -113,13 +152,14 @@ export const MenuDetailPrintPage: React.FC = () => {
           >
             {versions.map((v) => (
               <option key={v.id} value={v.id}>
-                v{v.version_no} ({v.created_at.slice(0, 10)})
+                v{v.version_no} ({formatIsoToJstDate(v.created_at)})
               </option>
             ))}
           </select>
           <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
             状態: {formatMenuStatusLabel(status)}
           </span>
+          <SyncStatusBadge state={syncInfo.state} />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -221,7 +261,7 @@ export const MenuDetailPrintPage: React.FC = () => {
           <div className="mt-1.5 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono-num">
             <span>第{activeVersion.version_no}版</span>
             <span aria-hidden="true">·</span>
-            <span>作成日 {activeVersion.created_at.slice(0, 10)}</span>
+            <span>作成日 {formatIsoToJstDate(activeVersion.created_at)}</span>
             {metrics.byIntensity.map((b) => (
               <span key={b.intensity}>
                 · {b.intensity}: {formatDistanceM(b.distance_m)} ({b.percentage}%)
@@ -355,7 +395,7 @@ export const MenuDetailPrintPage: React.FC = () => {
                   {formatStatusTransition(h)}
                 </span>
                 <span className="font-mono-num text-slate-500 dark:text-slate-400">
-                  {h.changed_at.slice(0, 16).replace('T', ' ')}
+                  {formatIsoToJstDateTime(h.changed_at)}
                 </span>
               </div>
             ))}

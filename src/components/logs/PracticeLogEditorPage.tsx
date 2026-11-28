@@ -5,6 +5,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useSwimData } from '../../hooks/useSwimData';
 import { deleteDraft, loadDraft, saveDraft } from '../../lib/offlineDb';
 import type { SplitRecord } from '../../types/database';
+import { getTodayJst } from '../../utils/dateJst';
 import {
   calculateMenuMetrics,
   computeRowDistance,
@@ -67,9 +68,7 @@ export const PracticeLogEditorPage: React.FC = () => {
   );
 
   const [selectedDayId, setSelectedDayId] = useState<string>(presetDayId || 'NEW');
-  const [practiceDate, setPracticeDate] = useState<string>(() =>
-    new Date().toISOString().slice(0, 10)
-  );
+  const [practiceDate, setPracticeDate] = useState<string>(() => getTodayJst());
   const [dayNote, setDayNote] = useState('');
   const [selectedVersionId, setSelectedVersionId] = useState<string>(() => {
     if (presetVersionId) return presetVersionId;
@@ -155,7 +154,7 @@ export const PracticeLogEditorPage: React.FC = () => {
     const scope = `${userId}:${draftKey}:${presetDayId}:${presetVersionId}`;
     if (prevScopeRef.current !== null && prevScopeRef.current !== scope) {
       setSelectedDayId(presetDayId || 'NEW');
-      setPracticeDate(new Date().toISOString().slice(0, 10));
+      setPracticeDate(getTodayJst());
       setDayNote('');
       setSelectedVersionId(presetVersionId || sharedVersions[0]?.id || '');
       setTotalTimeText('');
@@ -286,6 +285,18 @@ export const PracticeLogEditorPage: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       flushNow();
     };
+  }, []);
+
+  // Warn before closing tab if unsaved log inputs remain
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirtyRef.current && !submittedRef.current && !submittingRef.current) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
   const executableRows = useMemo(
@@ -429,7 +440,9 @@ export const PracticeLogEditorPage: React.FC = () => {
       if (userId) {
         await deleteDraft(userId, draftKey);
       }
-      navigate(`/logs/day/${dayId}`);
+      navigate(`/logs/day/${dayId}`, {
+        state: { saveNotice: '練習記録を保存しました。' },
+      });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : '記録の保存に失敗しました。');
     } finally {
@@ -478,7 +491,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                 isDirtyRef.current = true;
                 setSelectedDayId(e.target.value);
               }}
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
             >
               <option value="NEW">新しい練習日を登録（同日があれば統合）</option>
               {activeDays.map((d) => (
@@ -506,7 +519,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                   isDirtyRef.current = true;
                   setPracticeDate(e.target.value);
                 }}
-                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
               />
             </div>
           )}
@@ -529,7 +542,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                 setDayNote(e.target.value);
               }}
               placeholder="例: 朝練 25mプール 体調良好"
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
             />
           </div>
         )}
@@ -549,7 +562,7 @@ export const PracticeLogEditorPage: React.FC = () => {
               setSelectedVersionId(e.target.value);
             }}
             required
-            className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+            className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
           >
             {sharedVersions.length === 0 ? (
               <option value="">共有中のメニューがありません</option>
@@ -596,12 +609,18 @@ export const PracticeLogEditorPage: React.FC = () => {
             };
             const dist = computeRowDistance(row);
             const rowBase = `log-row-${row.id}`;
+            const isRowFilled = Boolean(
+              val.time_text.trim() ||
+                val.splits_text.trim() ||
+                val.rating ||
+                val.impression.trim()
+            );
             return (
               <div
                 key={row.id}
                 className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3"
               >
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-bold text-[#0b1f3a] dark:text-slate-50">
                     <span className="text-[#0077b6] dark:text-[#38bdf8] mr-2">
                       [{row.block_type}]
@@ -614,9 +633,22 @@ export const PracticeLogEditorPage: React.FC = () => {
                       ({row.intensity} · {formatDistanceM(dist)})
                     </span>
                   </div>
-                  <div className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
-                    {row.circle ? `サークル ${row.circle}` : ''}
-                    {row.hr ? ` · HR ${row.hr}` : ''}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`inline-flex items-center rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${
+                        isRowFilled
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200'
+                          : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400'
+                      }`}
+                    >
+                      {isRowFilled ? '入力済み' : '未入力'}
+                    </span>
+                    {(row.circle || row.hr) && (
+                      <div className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
+                        {row.circle ? `サークル ${row.circle}` : ''}
+                        {row.hr ? ` · HR ${row.hr}` : ''}
+                      </div>
+                    )}
                   </div>
                 </div>
                 {(row.instruction || row.free_text) && (
@@ -641,7 +673,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                         updateRowInput(row.id, { time_text: e.target.value })
                       }
                       placeholder="31.45"
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     />
                   </div>
 
@@ -660,7 +692,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                         updateRowInput(row.id, { splits_text: e.target.value })
                       }
                       placeholder="31.2, 31.5, 31.8"
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     />
                   </div>
 
@@ -675,7 +707,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                       id={`${rowBase}-rating`}
                       value={val.rating}
                       onChange={(e) => updateRowInput(row.id, { rating: e.target.value })}
-                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                      className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
                     >
                       <option value="">未選択</option>
                       {[1, 2, 3, 4, 5].map((n) => (
@@ -702,7 +734,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                       updateRowInput(row.id, { impression: e.target.value })
                     }
                     placeholder="このセットの感覚・メモ"
-                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+                    className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
                   />
                 </div>
               </div>
@@ -733,7 +765,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                 setTotalTimeText(e.target.value);
               }}
               placeholder="45:00"
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-sm dark:border-slate-700 dark:bg-[#07111e]"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 font-mono-num text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
             />
           </div>
 
@@ -751,7 +783,7 @@ export const PracticeLogEditorPage: React.FC = () => {
                 isDirtyRef.current = true;
                 setEntryRating(e.target.value);
               }}
-              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+              className="mt-1 w-full min-h-[44px] rounded-xl border border-slate-300 bg-white px-3 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
             >
               <option value="">未選択</option>
               {[1, 2, 3, 4, 5].map((n) => (
@@ -779,7 +811,7 @@ export const PracticeLogEditorPage: React.FC = () => {
               setEntryImpression(e.target.value);
             }}
             placeholder="泳ぎの感触、課題、良かった点など"
-            className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-[#07111e]"
+            className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-base sm:text-sm dark:border-slate-700 dark:bg-[#07111e]"
           />
         </div>
 

@@ -9,8 +9,7 @@ import React, {
 } from 'react';
 import {
   createEmptyDataset,
-  enqueueOutboxItem,
-  enqueueOutboxItemRaw,
+  enqueueOutboxBatch,
   exportBackupBundle,
   importBackupBundle,
   listAllOutboxCountsByOwner,
@@ -18,13 +17,19 @@ import {
   loadCachedDataset,
   loadCompetitions,
   loadTemplateMeta,
-  removeOutboxItem,
+  previewBackupImport,
+  removeOutboxItemsBatch,
+  retryErroredOutboxForOwner,
   saveCompetitions,
   saveTemplateMeta,
   updateOutboxItem,
+  type BackupImportPreview,
 } from '../lib/offlineDb';
 import {
   applyOutboxOverlayToDataset,
+  getOutboxDependentItems,
+} from '../lib/outboxOverlay';
+import {
   refreshConflictServerRecord,
   resolveConflictUseServer,
   resolveConflictWithMergedPayload,
@@ -53,6 +58,7 @@ interface SwimDataContextValue {
   isSyncing: boolean;
   isUpdatingProfile: boolean;
   lastSyncMessage: string | null;
+  lastSyncKind: 'synced_items' | 'up_to_date' | 'pending' | 'error' | 'conflict' | 'skipped' | null;
   pendingCount: number;
   conflictItems: OutboxItem[];
   errorItems: OutboxItem[];
@@ -154,15 +160,109 @@ interface SwimDataContextValue {
   ) => Promise<void>;
   refreshConflictRecord: (item: OutboxItem) => Promise<OutboxItem>;
   retryErroredItem: (item: OutboxItem) => Promise<void>;
+  retryAllErroredItems: () => Promise<void>;
   discardOutboxItem: (queueId: string) => Promise<void>;
+  discardOutboxWithDependents: (queueId: string) => Promise<{ removedCount: number }>;
   // Local-only metadata & backup
   saveCompetitionsList: (items: LocalCompetitionGoal[]) => Promise<void>;
   toggleTemplateFlag: (menuId: string, isTemplate: boolean, plannedDate?: string) => Promise<void>;
   exportJsonBackup: () => Promise<SwimlogBackupBundle>;
-  importJsonBackup: (bundle: SwimlogBackupBundle) => Promise<{ importedOutboxCount: number }>;
+  previewJsonBackup: (
+    rawBundle: unknown
+  ) => Promise<{ bundle: SwimlogBackupBundle; preview: BackupImportPreview }>;
+  importJsonBackup: (
+    bundle: SwimlogBackupBundle
+  ) => Promise<{ importedOutboxCount: number; skippedDuplicateCount: number }>;
 }
 
 const SwimDataContext = createContext<SwimDataContextValue | null>(null);
+
+export function shouldResumeSyncAfterBackupImport(params: {
+  importSucceeded: boolean;
+  hadPendingResync: boolean;
+  isVisible: boolean;
+  isOnline: boolean;
+  isStillImporting: boolean;
+  targetSlot: 'coach' | 'athlete';
+  targetUserId: string;
+  activeSlot: 'coach' | 'athlete' | null;
+  activeUserId: string | null;
+}): boolean {
+  if (params.isStillImporting) return false;
+  if (!params.isVisible || !params.isOnline) return false;
+  if (
+    params.activeSlot !== params.targetSlot ||
+    params.activeUserId !== params.targetUserId
+  ) {
+    return false;
+  }
+  if (params.importSucceeded) {
+    return true;
+  }
+  return params.hadPendingResync;
+}
+
+export async function executeBackupImportWithResync<
+  TSession extends { slot: 'coach' | 'athlete'; userId: string; role: 'coach' | 'athlete' },
+  TResult,
+>(params: {
+  targetSession: TSession | null;
+  getActiveSession: () => TSession | null;
+  syncingKeys: Set<string>;
+  profileUpdatingKeys: Set<string>;
+  importingBackupKeys: Set<string>;
+  pendingResyncKeys: Set<string>;
+  isVisible: () => boolean;
+  isOnline: () => boolean;
+  runImport: (userId: string, role: 'coach' | 'athlete') => Promise<TResult>;
+  onImportApplied: () => Promise<void>;
+  onResumeSync: () => Promise<void> | void;
+}): Promise<TResult> {
+  const { targetSession } = params;
+  if (!targetSession) throw new Error('ログインが必要です。');
+  const lockKey = `${targetSession.slot}:${targetSession.userId}`;
+  if (
+    params.syncingKeys.has(lockKey) ||
+    params.profileUpdatingKeys.has(lockKey) ||
+    params.importingBackupKeys.has(lockKey)
+  ) {
+    throw new Error('同期または表示名更新中のため、完了後に再度復元を実行してください。');
+  }
+
+  params.importingBackupKeys.add(lockKey);
+  let importSucceeded = false;
+  try {
+    const res = await params.runImport(targetSession.userId, targetSession.role);
+    const stillSameSession =
+      params.getActiveSession()?.slot === targetSession.slot &&
+      params.getActiveSession()?.userId === targetSession.userId;
+    if (stillSameSession) {
+      await params.onImportApplied();
+    }
+    importSucceeded = true;
+    return res;
+  } finally {
+    params.importingBackupKeys.delete(lockKey);
+    const hadPendingResync = params.pendingResyncKeys.has(lockKey);
+    params.pendingResyncKeys.delete(lockKey);
+    const activeNow = params.getActiveSession();
+    if (
+      shouldResumeSyncAfterBackupImport({
+        importSucceeded,
+        hadPendingResync,
+        isVisible: params.isVisible(),
+        isOnline: params.isOnline(),
+        isStillImporting: params.importingBackupKeys.has(lockKey),
+        targetSlot: targetSession.slot,
+        targetUserId: targetSession.userId,
+        activeSlot: activeNow?.slot ?? null,
+        activeUserId: activeNow?.userId ?? null,
+      })
+    ) {
+      void params.onResumeSync();
+    }
+  }
+}
 
 export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { session, refreshSession, updateSessionDisplayName } = useAuth();
@@ -176,6 +276,9 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isSyncing, setIsSyncing] = useState(false);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [lastSyncMessage, setLastSyncMessage] = useState<string | null>(null);
+  const [lastSyncKind, setLastSyncKind] = useState<
+    'synced_items' | 'up_to_date' | 'pending' | 'error' | 'conflict' | 'skipped' | null
+  >(null);
   const syncingKeysRef = useRef<Set<string>>(new Set());
   const pendingResyncKeysRef = useRef<Set<string>>(new Set());
   const profileUpdatingKeysRef = useRef<Set<string>>(new Set());
@@ -237,7 +340,8 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const lockKey = `${targetSession.slot}:${targetSession.userId}`;
     const onlineNow = getCurrentOnlineStatus();
     if (!onlineNow) {
-      setLastSyncMessage('オフラインのためローカル保存を継続中です。');
+      setLastSyncMessage('オフラインのため、この端末に一時保存しています。');
+      setLastSyncKind('pending');
       return;
     }
     if (
@@ -275,16 +379,36 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setAllOutboxCounts(counts);
       lastSyncCompletedAtRef.current = Date.now();
 
+      const remainingConflicts = ownerOutbox.filter((i) => i.status === 'conflict').length;
+      const remainingErrors = ownerOutbox.filter((i) => i.status === 'error').length;
+      const remainingPending = ownerOutbox.filter(
+        (i) => i.status === 'pending' || i.status === 'syncing'
+      ).length;
+
       if (result.skippedReason) {
         setLastSyncMessage(result.skippedReason);
-      } else if (result.conflictCount > 0) {
-        setLastSyncMessage(`競合が ${result.conflictCount} 件あります。内容を確認してください。`);
-      } else if (result.errorCount > 0) {
-        setLastSyncMessage(`同期エラーが ${result.errorCount} 件あります。`);
+        setLastSyncKind('skipped');
+      } else if (remainingConflicts > 0) {
+        setLastSyncMessage(
+          `同じ記録への変更が ${remainingConflicts} 件重なりました。内容を確認してください。`
+        );
+        setLastSyncKind('conflict');
+      } else if (remainingErrors > 0) {
+        setLastSyncMessage(
+          `送信に失敗した記録が ${remainingErrors} 件あります（「再試行」をお試しください）。`
+        );
+        setLastSyncKind('error');
+      } else if (remainingPending > 0) {
+        setLastSyncMessage(
+          `まだ送信待ちの記録が ${remainingPending} 件残っています（端末には保存済みです）。`
+        );
+        setLastSyncKind('pending');
       } else if (result.syncedCount > 0) {
-        setLastSyncMessage(`${result.syncedCount} 件を同期しました。`);
+        setLastSyncMessage(`${result.syncedCount} 件をクラウドに保存しました。`);
+        setLastSyncKind('synced_items');
       } else {
-        setLastSyncMessage('最新状態です。');
+        setLastSyncMessage('すべて最新の状態です。');
+        setLastSyncKind('up_to_date');
       }
     } catch (err) {
       if (
@@ -292,6 +416,7 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         sessionRef.current?.slot === targetSession.slot
       ) {
         setLastSyncMessage(err instanceof Error ? err.message : '同期中にエラーが発生しました。');
+        setLastSyncKind('error');
       }
     } finally {
       syncingKeysRef.current.delete(lockKey);
@@ -402,7 +527,9 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     prevOnlineForSyncRef.current = getCurrentOnlineStatus();
     void reloadLocalForSession().then(() => {
-      if (getCurrentOnlineStatus()) {
+      const isVisible =
+        typeof document === 'undefined' || document.visibilityState === 'visible';
+      if (getCurrentOnlineStatus() && isVisible) {
         void syncNow();
       }
     });
@@ -480,11 +607,13 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (item.owner_user_id !== session.userId || item.owner_role !== session.role) {
           throw new Error('アカウント検証に失敗しました。');
         }
-        await enqueueOutboxItem(item);
       }
+      await enqueueOutboxBatch(items.map((item) => ({ item, mode: 'coalesce' as const })));
       await reloadLocalForSession();
 
-      if (getCurrentOnlineStatus()) {
+      const isVisible =
+        typeof document === 'undefined' || document.visibilityState === 'visible';
+      if (getCurrentOnlineStatus() && isVisible) {
         void syncNow();
       }
     },
@@ -561,12 +690,12 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       // Note: Do NOT coalesce insert+update for `menus` because menu_versions insert must run BEFORE is_shared=true!
-      // Therefore write menu_versions then enqueue is_shared=true directly without coalescing the initial insert:
-      await enqueueOutboxItem(items[0]);
-      await enqueueOutboxItem(items[1]);
-      if (items[2]) {
-        await enqueueOutboxItemRaw(items[2]);
-      }
+      // Write menu, menu_versions, and optional initial share inside one atomic IndexedDB transaction:
+      await enqueueOutboxBatch([
+        { item: items[0], mode: 'coalesce' },
+        { item: items[1], mode: 'coalesce' },
+        ...(items[2] ? [{ item: items[2], mode: 'raw' as const }] : []),
+      ]);
 
       await reloadLocalForSession();
       if (getCurrentOnlineStatus()) {
@@ -1038,19 +1167,43 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const retryErroredItem = useCallback(
     async (item: OutboxItem) => {
-      await updateOutboxItem({ ...item, status: 'pending', last_error: null });
+      await updateOutboxItem({
+        ...item,
+        status: 'pending',
+        last_error: null,
+        sync_context_id: null,
+        sync_started_at: null,
+      });
       await reloadLocalForSession();
       if (getCurrentOnlineStatus()) void syncNow();
     },
     [reloadLocalForSession, syncNow]
   );
 
-  const discardOutboxItem = useCallback(
+  const retryAllErroredItems = useCallback(async () => {
+    const active = sessionRef.current;
+    if (!active) return;
+    await retryErroredOutboxForOwner(active.userId);
+    await reloadLocalForSession();
+    if (getCurrentOnlineStatus()) void syncNow();
+  }, [reloadLocalForSession, syncNow]);
+
+  const discardOutboxWithDependents = useCallback(
     async (queueId: string) => {
-      await removeOutboxItem(queueId);
+      const dependents = getOutboxDependentItems(outboxRef.current, queueId);
+      const idsToRemove = [queueId, ...dependents.map((d) => d.queue_id)];
+      await removeOutboxItemsBatch(idsToRemove);
       await reloadLocalForSession();
+      return { removedCount: idsToRemove.length };
     },
     [reloadLocalForSession]
+  );
+
+  const discardOutboxItem = useCallback(
+    async (queueId: string) => {
+      await discardOutboxWithDependents(queueId);
+    },
+    [discardOutboxWithDependents]
   );
 
   const saveCompetitionsList = useCallback(
@@ -1080,44 +1233,28 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return exportBackupBundle(session.userId, session.role);
   }, [session]);
 
+  const previewJsonBackup = useCallback(async (rawBundle: unknown) => {
+    const targetSession = sessionRef.current;
+    if (!targetSession) throw new Error('ログインが必要です。');
+    return previewBackupImport(rawBundle, targetSession.userId, targetSession.role);
+  }, []);
+
   const importJsonBackup = useCallback(
     async (bundle: SwimlogBackupBundle) => {
-      const targetSession = sessionRef.current;
-      if (!targetSession) throw new Error('ログインが必要です。');
-      const lockKey = `${targetSession.slot}:${targetSession.userId}`;
-      if (
-        syncingKeysRef.current.has(lockKey) ||
-        profileUpdatingKeysRef.current.has(lockKey) ||
-        importingBackupKeysRef.current.has(lockKey)
-      ) {
-        throw new Error('同期または表示名更新中のため、完了後に再度復元を実行してください。');
-      }
-      importingBackupKeysRef.current.add(lockKey);
-      let importSucceeded = false;
-      try {
-        const res = await importBackupBundle(bundle, targetSession.userId, targetSession.role);
-        await reloadLocalForSession();
-        importSucceeded = true;
-        return res;
-      } finally {
-        importingBackupKeysRef.current.delete(lockKey);
-        if (pendingResyncKeysRef.current.has(lockKey)) {
-          pendingResyncKeysRef.current.delete(lockKey);
-          const isVisible =
-            typeof document === 'undefined' || document.visibilityState === 'visible';
-          const activeNow = sessionRef.current;
-          if (
-            !importSucceeded &&
-            isVisible &&
-            getCurrentOnlineStatus() &&
-            activeNow &&
-            activeNow.slot === targetSession.slot &&
-            activeNow.userId === targetSession.userId
-          ) {
-            void syncNow();
-          }
-        }
-      }
+      return executeBackupImportWithResync({
+        targetSession: sessionRef.current,
+        getActiveSession: () => sessionRef.current,
+        syncingKeys: syncingKeysRef.current,
+        profileUpdatingKeys: profileUpdatingKeysRef.current,
+        importingBackupKeys: importingBackupKeysRef.current,
+        pendingResyncKeys: pendingResyncKeysRef.current,
+        isVisible: () =>
+          typeof document === 'undefined' || document.visibilityState === 'visible',
+        isOnline: () => getCurrentOnlineStatus(),
+        runImport: (userId, role) => importBackupBundle(bundle, userId, role),
+        onImportApplied: reloadLocalForSession,
+        onResumeSync: syncNow,
+      });
     },
     [reloadLocalForSession, syncNow]
   );
@@ -1145,6 +1282,7 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isSyncing,
       isUpdatingProfile,
       lastSyncMessage,
+      lastSyncKind,
       pendingCount,
       conflictItems,
       errorItems,
@@ -1165,10 +1303,13 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       submitMergedConflict,
       refreshConflictRecord,
       retryErroredItem,
+      retryAllErroredItems,
       discardOutboxItem,
+      discardOutboxWithDependents,
       saveCompetitionsList,
       toggleTemplateFlag,
       exportJsonBackup,
+      previewJsonBackup,
       importJsonBackup,
     }),
     [
@@ -1180,6 +1321,7 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       isSyncing,
       isUpdatingProfile,
       lastSyncMessage,
+      lastSyncKind,
       pendingCount,
       conflictItems,
       errorItems,
@@ -1200,10 +1342,13 @@ export const SwimDataProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       submitMergedConflict,
       refreshConflictRecord,
       retryErroredItem,
+      retryAllErroredItems,
       discardOutboxItem,
+      discardOutboxWithDependents,
       saveCompetitionsList,
       toggleTemplateFlag,
       exportJsonBackup,
+      previewJsonBackup,
       importJsonBackup,
     ]
   );

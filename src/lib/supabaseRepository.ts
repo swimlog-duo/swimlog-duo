@@ -23,6 +23,7 @@ export interface ParsedSupabaseError {
     | 'MENU_HAS_NO_VERSION'
     | 'EXPECTED_REVISION_REQUIRED'
     | 'ROW_NOT_IN_VERSION'
+    | 'DUPLICATE_KEY'
     | 'NETWORK'
     | 'AUTH'
     | 'OTHER';
@@ -110,6 +111,14 @@ export function parseSupabaseError(err: unknown): ParsedSupabaseError {
   }
 
   if (
+    code === '23505' ||
+    combined.toLowerCase().includes('duplicate key') ||
+    combined.toLowerCase().includes('already exists')
+  ) {
+    return { kind: 'DUPLICATE_KEY', code: code ?? '23505', message: msg };
+  }
+
+  if (
     e.status === 401 ||
     combined.toLowerCase().includes('jwt') ||
     combined.toLowerCase().includes('not authenticated')
@@ -120,6 +129,8 @@ export function parseSupabaseError(err: unknown): ParsedSupabaseError {
   if (
     combined.toLowerCase().includes('failed to fetch') ||
     combined.toLowerCase().includes('networkerror') ||
+    combined.toLowerCase().includes('timeout') ||
+    combined.toLowerCase().includes('aborted') ||
     combined.toLowerCase().includes('fetch')
   ) {
     return { kind: 'NETWORK', code, message: msg };
@@ -316,6 +327,11 @@ export async function reviseMenuVersionOnServer(
     share_after: boolean;
   }
 ): Promise<{ menu: MenuRowRecord; version: MenuVersionRowRecord }> {
+  const preCheck = validateMenuVersionInput(params.title, params.content?.rows ?? []);
+  if (!preCheck.valid) {
+    throw new Error(preCheck.errors.join(' '));
+  }
+
   const { data: currentMenu, error: menuErr } = await client
     .from('menus')
     .select('id, is_shared, is_archived, created_by, created_at, updated_by, updated_at')
@@ -328,33 +344,70 @@ export async function reviseMenuVersionOnServer(
   }
 
   let workingMenu = currentMenu;
+  let unsharedForRevision = false;
+  let versionCreated = false;
+
   if (workingMenu.is_shared) {
     workingMenu = await updateMenuStatusOnServer(client, params.menu_id, { is_shared: false });
+    unsharedForRevision = true;
   }
 
-  const { data: latestVersions, error: verErr } = await client
-    .from('menu_versions')
-    .select('version_no')
-    .eq('menu_id', params.menu_id)
-    .order('version_no', { ascending: false })
-    .limit(1);
+  try {
+    const { data: latestVersions, error: verErr } = await client
+      .from('menu_versions')
+      .select('version_no')
+      .eq('menu_id', params.menu_id)
+      .order('version_no', { ascending: false })
+      .limit(1);
 
-  if (verErr) throw verErr;
-  const maxVersionNo = latestVersions && latestVersions.length > 0 ? latestVersions[0].version_no : 0;
+    if (verErr) throw verErr;
+    const maxVersionNo =
+      latestVersions && latestVersions.length > 0 ? latestVersions[0].version_no : 0;
 
-  const newVersion = await insertMenuVersionOnServer(client, {
-    id: params.version_id,
-    menu_id: params.menu_id,
-    version_no: maxVersionNo + 1,
-    title: params.title,
-    content: params.content,
-  });
+    const newVersion = await insertMenuVersionOnServer(client, {
+      id: params.version_id,
+      menu_id: params.menu_id,
+      version_no: maxVersionNo + 1,
+      title: params.title,
+      content: params.content,
+    });
+    versionCreated = true;
 
-  if (params.share_after) {
-    workingMenu = await updateMenuStatusOnServer(client, params.menu_id, { is_shared: true });
+    if (params.share_after) {
+      workingMenu = await updateMenuStatusOnServer(client, params.menu_id, { is_shared: true });
+    }
+
+    return { menu: workingMenu, version: newVersion };
+  } catch (err) {
+    if (unsharedForRevision && !versionCreated) {
+      try {
+        await updateMenuStatusOnServer(client, params.menu_id, { is_shared: true });
+      } catch (rollbackErr) {
+        const primaryMsg =
+          err instanceof Error
+            ? err.message
+            : String((err as { message?: unknown })?.message ?? '改訂版の保存に失敗しました。');
+        const rollbackMsg =
+          rollbackErr instanceof Error
+            ? rollbackErr.message
+            : String(
+                (rollbackErr as { message?: unknown })?.message ??
+                  '共有状態の復旧に失敗しました。'
+              );
+        const combinedErr = new Error(
+          `${primaryMsg}（さらにメニューの共有状態 (is_shared) の自動復旧にも失敗しました: ${rollbackMsg}）`
+        ) as Error & { code?: string; details?: unknown; status?: number };
+        if (err && typeof err === 'object') {
+          const src = err as { code?: string; details?: unknown; status?: number };
+          if (src.code) combinedErr.code = src.code;
+          if (src.details !== undefined) combinedErr.details = src.details;
+          if (src.status !== undefined) combinedErr.status = src.status;
+        }
+        throw combinedErr;
+      }
+    }
+    throw err;
   }
-
-  return { menu: workingMenu, version: newVersion };
 }
 
 export async function insertPracticeDayOnServer(
@@ -577,6 +630,22 @@ export async function fetchSingleRecordForConflict(
   }
   const { data, error } = await client.from(table).select('*').eq('id', id).maybeSingle();
   if (error) return null;
+  return (data as Record<string, unknown> | null) ?? null;
+}
+
+export async function fetchExistingRecordById(
+  client: SupabaseClient,
+  table:
+    | 'menus'
+    | 'menu_versions'
+    | 'practice_days'
+    | 'practice_entries'
+    | 'set_results'
+    | 'coach_comments',
+  id: string
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await client.from(table).select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
   return (data as Record<string, unknown> | null) ?? null;
 }
 

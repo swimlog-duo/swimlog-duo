@@ -67,6 +67,8 @@ export interface OutboxItem {
   conflict_detail?: ConflictDetail | null;
   retry_count: number;
   last_error: string | null;
+  sync_context_id?: string | null;
+  sync_started_at?: string | null;
   created_at: string;
   updated_at: string;
 }

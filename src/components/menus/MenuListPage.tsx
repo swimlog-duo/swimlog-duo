@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Bookmark, Copy, Plus, Search } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useSwimData } from '../../hooks/useSwimData';
+import { getRecordSyncState } from '../../lib/outboxOverlay';
 import type { MenuDerivedStatus } from '../../types/domain';
 import {
   calculateMenuMetrics,
@@ -10,12 +11,13 @@ import {
   formatDistanceM,
   formatMenuStatusLabel,
 } from '../../utils/swimCalculations';
+import { SyncStatusBadge } from '../sync/SyncStatusBadge';
 
 type FilterTab = 'all' | MenuDerivedStatus | 'templates';
 
 export const MenuListPage: React.FC = () => {
   const { session } = useAuth();
-  const { dataset, templateMeta, toggleTemplateFlag } = useSwimData();
+  const { dataset, outbox, templateMeta, toggleTemplateFlag } = useSwimData();
   const navigate = useNavigate();
   const isCoach = session?.role === 'coach';
 
@@ -155,6 +157,10 @@ export const MenuListPage: React.FC = () => {
             const metrics = calculateMenuMetrics(rows);
             const status = deriveMenuStatus(menu, dataset.menu_status_history);
             const isTemplate = templateIdSet.has(menu.id);
+            const syncStatus = getRecordSyncState(
+              outbox,
+              ver ? [menu.id, ver.id] : [menu.id]
+            );
 
             return (
               <div
@@ -193,6 +199,9 @@ export const MenuListPage: React.FC = () => {
                     <span>{formatDistanceM(metrics.totalDistanceM)}</span>
                     <span aria-hidden="true">·</span>
                     <span>{rows.length}行</span>
+                    {syncStatus.state !== 'synced' && (
+                      <SyncStatusBadge state={syncStatus.state} compact className="font-sans" />
+                    )}
                   </div>
 
                   {metrics.byIntensity.length > 0 && (

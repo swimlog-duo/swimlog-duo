@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { useSwimData } from '../../hooks/useSwimData';
 import { INTENSITY_LEVELS, STROKE_TYPES } from '../../types/database';
+import { getDaysUntilJst, getTodayJst } from '../../utils/dateJst';
 import {
   calculateMenuMetrics,
   formatDistanceM,
@@ -94,7 +95,7 @@ export const AnalyticsPage: React.FC = () => {
     [timeTrend]
   );
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getTodayJst();
   const upcomingComps = useMemo(
     () =>
       competitions
@@ -236,11 +237,7 @@ export const AnalyticsPage: React.FC = () => {
           </h2>
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
             {upcomingComps.map((c) => {
-              const daysLeft = Math.ceil(
-                (new Date(`${c.event_date}T00:00:00`).getTime() -
-                  new Date(`${today}T00:00:00`).getTime()) /
-                  (1000 * 60 * 60 * 24)
-              );
+              const daysLeft = getDaysUntilJst(c.event_date, today);
               return (
                 <div key={c.id} className="py-2.5 flex items-center justify-between gap-2">
                   <div>

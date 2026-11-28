@@ -1,9 +1,16 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { Edit2, History, MessageSquare, Plus, Save, X } from 'lucide-react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { CheckCircle2, Edit2, History, MessageSquare, Plus, Save, Trash2, X } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useSwimData } from '../../hooks/useSwimData';
-import type { PracticeEntryRow, SetResultRow, SplitRecord } from '../../types/database';
+import { getRecordSyncState } from '../../lib/outboxOverlay';
+import type {
+  PracticeDayRow,
+  PracticeEntryRow,
+  SetResultRow,
+  SplitRecord,
+} from '../../types/database';
+import { formatIsoToJstDateTime, formatYmdWithWeekdayJst } from '../../utils/dateJst';
 import {
   calculateMenuMetrics,
   formatDistanceM,
@@ -11,6 +18,7 @@ import {
   parseTimeInputToMs,
 } from '../../utils/swimCalculations';
 import { normalizeDisplayName } from '../../utils/displayName';
+import { SyncStatusBadge } from '../sync/SyncStatusBadge';
 
 function formatHistoryTableLabel(tableName: string): string {
   switch (tableName) {
@@ -80,17 +88,60 @@ function formatOldDataSummary(
   return parts.length > 0 ? parts.join(' · ') : '変更前の記録';
 }
 
+function formatCurrentDataSummary(
+  tableName: string,
+  day: PracticeDayRow,
+  entriesById: Map<string, PracticeEntryRow>,
+  setsById: Map<string, SetResultRow>,
+  recordId: string
+): string {
+  if (tableName === 'practice_days' && recordId === day.id) {
+    if (day.is_deleted) return '削除済み（非表示）';
+    return `日付: ${day.practice_date} · メモ: ${day.note?.trim() || '（なし）'}`;
+  }
+  if (tableName === 'practice_entries') {
+    const entry = entriesById.get(recordId);
+    if (!entry) return '記録なし';
+    if (entry.is_deleted) return '削除済み（非表示）';
+    const parts: string[] = [];
+    if (entry.total_time_ms != null) parts.push(`合計時間: ${formatTimeMs(entry.total_time_ms)}`);
+    if (entry.rating != null) parts.push(`評価: ${entry.rating}/5`);
+    parts.push(`感想: ${entry.impression?.trim() || '（なし）'}`);
+    return parts.join(' · ');
+  }
+  if (tableName === 'set_results') {
+    const sr = setsById.get(recordId);
+    if (!sr) return '記録なし';
+    if (sr.is_deleted) return '削除済み（非表示）';
+    const parts: string[] = [];
+    if (sr.time_ms != null) parts.push(`タイム: ${formatTimeMs(sr.time_ms)}`);
+    if (Array.isArray(sr.splits) && sr.splits.length > 0) {
+      parts.push(`ラップ: ${sr.splits.map((sp) => formatTimeMs(sp.time_ms)).join(' / ')}`);
+    }
+    if (sr.rating != null) parts.push(`評価: ${sr.rating}/5`);
+    if (sr.impression?.trim()) parts.push(`メモ: ${sr.impression.trim()}`);
+    return parts.length > 0 ? parts.join(' · ') : '記録あり';
+  }
+  return '最新の状態';
+}
+
 export const PracticeLogDetailPage: React.FC = () => {
   const { dayId } = useParams<{ dayId: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { session } = useAuth();
   const {
     dataset,
+    outbox,
     createSetResult,
     updatePracticeDay,
     updatePracticeEntry,
     updateSetResult,
     addCoachComment,
   } = useSwimData();
+
+  const saveNotice =
+    (location.state as { saveNotice?: string } | null)?.saveNotice ?? null;
 
   const isCoach = session?.role === 'coach';
   const isAthlete = session?.role === 'athlete';
@@ -144,6 +195,12 @@ export const PracticeLogDetailPage: React.FC = () => {
   const [commentEntryId, setCommentEntryId] = useState<string>('');
   const [commentSetResultId, setCommentSetResultId] = useState<string>('');
   const [commentBody, setCommentBody] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{
+    type: 'day' | 'entry' | 'set';
+    id: string;
+    revision: number;
+    label: string;
+  } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -316,6 +373,35 @@ export const PracticeLogDetailPage: React.FC = () => {
     }
   };
 
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || savingRef.current) return;
+    setModalError(null);
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (deleteTarget.type === 'day') {
+        await updatePracticeDay(deleteTarget.id, deleteTarget.revision, { is_deleted: true });
+        setDeleteTarget(null);
+        navigate('/logs', { replace: true });
+        return;
+      }
+      if (deleteTarget.type === 'entry') {
+        await updatePracticeEntry(deleteTarget.id, deleteTarget.revision, { is_deleted: true });
+      } else {
+        await updateSetResult(deleteTarget.id, deleteTarget.revision, { is_deleted: true });
+      }
+      setDeleteTarget(null);
+    } catch (err) {
+      setModalError(err instanceof Error ? err.message : '削除に失敗しました。');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const entriesById = new Map(dataset.practice_entries.map((e) => [e.id, e]));
+  const setsById = new Map(dataset.set_results.map((s) => [s.id, s]));
+
   const relatedIds = new Set<string>([
     day.id,
     ...entries.map((e) => e.id),
@@ -324,12 +410,27 @@ export const PracticeLogDetailPage: React.FC = () => {
       .map((s) => s.id),
   ]);
 
+  const daySyncInfo = getRecordSyncState(outbox, Array.from(relatedIds));
+
   const relatedHistory = dataset.record_history
     .filter((h) => relatedIds.has(h.record_id))
     .sort((a, b) => b.changed_at.localeCompare(a.changed_at));
 
   return (
     <div className="space-y-6">
+      {saveNotice && (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-200"
+        >
+          <span className="inline-flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{saveNotice}</span>
+          </span>
+          <SyncStatusBadge state={daySyncInfo.state} />
+        </div>
+      )}
+
       {actionError && (
         <div className="rounded-2xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
           {actionError}
@@ -340,11 +441,14 @@ export const PracticeLogDetailPage: React.FC = () => {
       <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h1 className="font-mono-num text-2xl font-bold text-[#0b1f3a] dark:text-slate-50">
-              {day.practice_date}
-            </h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="font-mono-num text-2xl font-bold text-[#0b1f3a] dark:text-slate-50">
+                {formatYmdWithWeekdayJst(day.practice_date)}
+              </h1>
+              <SyncStatusBadge state={daySyncInfo.state} compact />
+            </div>
             <p className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
-              最終更新 {day.updated_at.slice(0, 16).replace('T', ' ')}
+              最終更新 {formatIsoToJstDateTime(day.updated_at)}
             </p>
           </div>
 
@@ -369,6 +473,24 @@ export const PracticeLogDetailPage: React.FC = () => {
               <Edit2 className="h-3.5 w-3.5" />
               <span>日次メモ編集</span>
             </button>
+            {isAthlete && (
+              <button
+                type="button"
+                onClick={() => {
+                  setModalError(null);
+                  setDeleteTarget({
+                    type: 'day',
+                    id: day.id,
+                    revision: day.revision,
+                    label: `${day.practice_date} の練習日記録`,
+                  });
+                }}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-rose-300 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950/40 whitespace-nowrap"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>この日を削除</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -413,11 +535,17 @@ export const PracticeLogDetailPage: React.FC = () => {
       {entries.map((entry) => {
         const ver = dataset.menu_versions.find((v) => v.id === entry.menu_version_id);
         const rows = ver?.content?.rows ?? [];
+        const executableRows = rows.filter((r) => !r.is_group_header);
         const metrics = calculateMenuMetrics(rows);
         const setResults = dataset.set_results.filter(
           (s) => s.entry_id === entry.id && !s.is_deleted
         );
         const setByRowId = new Map(setResults.map((s) => [s.row_id, s]));
+        const recordedSetCount = executableRows.filter((r) => setByRowId.has(r.id)).length;
+        const entrySyncInfo = getRecordSyncState(outbox, [
+          entry.id,
+          ...setResults.map((s) => s.id),
+        ]);
         const comments = dataset.coach_comments.filter((c) => c.entry_id === entry.id);
 
         return (
@@ -427,12 +555,17 @@ export const PracticeLogDetailPage: React.FC = () => {
           >
             <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3 dark:border-slate-800">
               <div>
-                <h2 className="text-lg font-bold text-[#0b1f3a] dark:text-slate-50">
-                  {ver?.title ?? '実施メニュー'}{' '}
-                  <span className="font-mono-num text-sm text-slate-500">
-                    (v{ver?.version_no ?? '?'})
-                  </span>
-                </h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-bold text-[#0b1f3a] dark:text-slate-50">
+                    {ver?.title ?? '実施メニュー'}{' '}
+                    <span className="font-mono-num text-sm text-slate-500">
+                      (v{ver?.version_no ?? '?'})
+                    </span>
+                  </h2>
+                  {entrySyncInfo.state !== 'synced' && (
+                    <SyncStatusBadge state={entrySyncInfo.state} compact />
+                  )}
+                </div>
                 <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono-num">
                   <span>{formatDistanceM(metrics.totalDistanceM)}</span>
                   {entry.total_time_ms != null && (
@@ -442,14 +575,63 @@ export const PracticeLogDetailPage: React.FC = () => {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => openEntryEdit(entry)}
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 whitespace-nowrap"
-              >
-                <Edit2 className="h-3.5 w-3.5" />
-                <span>全体記録を編集</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openEntryEdit(entry)}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-slate-300 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 whitespace-nowrap"
+                >
+                  <Edit2 className="h-3.5 w-3.5" />
+                  <span>全体記録を編集</span>
+                </button>
+                {isAthlete && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalError(null);
+                      setDeleteTarget({
+                        type: 'entry',
+                        id: entry.id,
+                        revision: entry.revision,
+                        label: `${ver?.title ?? '実施メニュー'} の記録`,
+                      });
+                    }}
+                    className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-rose-300 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950/40 whitespace-nowrap"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>記録を削除</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Coach Planned vs Athlete Actual Comparison Strip */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 text-xs dark:border-slate-800 dark:bg-[#07111e]/70">
+              <div>
+                <div className="font-semibold text-slate-500 dark:text-slate-400">
+                  コーチの予定距離
+                </div>
+                <div className="mt-0.5 font-mono-num text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+                  {formatDistanceM(metrics.totalDistanceM)} ({executableRows.length}セット)
+                </div>
+              </div>
+              <div>
+                <div className="font-semibold text-slate-500 dark:text-slate-400">
+                  選手の実施記録
+                </div>
+                <div className="mt-0.5 font-mono-num text-sm font-bold text-[#0077b6] dark:text-[#38bdf8]">
+                  記録済み {recordedSetCount}/{executableRows.length}セット
+                </div>
+              </div>
+              <div>
+                <div className="font-semibold text-slate-500 dark:text-slate-400">
+                  全体タイム / 評価
+                </div>
+                <div className="mt-0.5 font-mono-num text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+                  {entry.total_time_ms != null ? formatTimeMs(entry.total_time_ms) : '未入力'}
+                  {entry.rating != null ? ` · ${entry.rating}/5` : ''}
+                </div>
+              </div>
             </div>
 
             {entry.impression && (
@@ -463,73 +645,110 @@ export const PracticeLogDetailPage: React.FC = () => {
 
             {/* Set Results Matched to Version Rows */}
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {rows
-                .filter((r) => !r.is_group_header)
-                .map((row) => {
-                  const sr = setByRowId.get(row.id);
-                  return (
-                    <div
-                      key={row.id}
-                      className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                    >
-                      <div>
-                        <div className="text-sm font-semibold text-[#0b1f3a] dark:text-slate-100">
-                          <span className="font-mono-num">
-                            {row.distance_m}m×{row.reps}×{row.sets}
-                          </span>{' '}
+              {executableRows.map((row) => {
+                const sr = setByRowId.get(row.id);
+                return (
+                  <div
+                    key={row.id}
+                    className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#0b1f3a] dark:text-slate-100">
+                        <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                          予定
+                        </span>
+                        <span className="font-mono-num">
+                          {row.distance_m}m×{row.reps}×{row.sets}
+                        </span>
+                        <span>
                           {row.stroke} ({row.intensity})
-                        </div>
-                        {sr ? (
-                          <div className="mt-1 space-y-0.5 text-xs text-slate-600 dark:text-slate-300">
-                            <div className="font-mono-num font-bold text-[#0077b6] dark:text-[#38bdf8]">
-                              タイム: {formatTimeMs(sr.time_ms)}
-                              {sr.rating != null ? ` · 評価 ${sr.rating}/5` : ''}
-                            </div>
-                            {sr.splits?.length > 0 && (
-                              <div className="font-mono-num text-slate-500 dark:text-slate-400">
-                                ラップ:{' '}
-                                {sr.splits
-                                  .map((sp) => `#${sp.rep} ${formatTimeMs(sp.time_ms)}`)
-                                  .join(' / ')}
-                              </div>
-                            )}
-                            {sr.impression && <div>メモ: {sr.impression}</div>}
-                          </div>
-                        ) : (
-                          <div className="mt-0.5 text-xs text-slate-400">未記録</div>
+                        </span>
+                        {row.circle && (
+                          <span className="font-mono-num text-xs text-slate-500 dark:text-slate-400">
+                            · {row.circle}
+                          </span>
                         )}
+                        <span
+                          className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                            sr
+                              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                          }`}
+                        >
+                          {sr ? '実施済' : '未入力'}
+                        </span>
                       </div>
-
                       {sr ? (
+                        <div className="mt-1 space-y-0.5 text-xs text-slate-600 dark:text-slate-300">
+                          <div className="font-mono-num font-bold text-[#0077b6] dark:text-[#38bdf8]">
+                            タイム: {formatTimeMs(sr.time_ms)}
+                            {sr.rating != null ? ` · 評価 ${sr.rating}/5` : ''}
+                          </div>
+                          {sr.splits?.length > 0 && (
+                            <div className="font-mono-num text-slate-500 dark:text-slate-400">
+                              ラップ:{' '}
+                              {sr.splits
+                                .map((sp) => `#${sp.rep} ${formatTimeMs(sp.time_ms)}`)
+                                .join(' / ')}
+                            </div>
+                          )}
+                          {sr.impression && <div>メモ: {sr.impression}</div>}
+                        </div>
+                      ) : (
+                        <div className="mt-0.5 text-xs text-slate-400">未記録</div>
+                      )}
+                    </div>
+
+                    {sr ? (
+                      <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
                         <button
                           type="button"
                           onClick={() => openSetEdit(sr)}
-                          className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-slate-200 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 self-start sm:self-center whitespace-nowrap"
+                          className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-slate-200 px-3.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800 whitespace-nowrap"
                         >
                           <Edit2 className="h-3.5 w-3.5" />
                           <span>編集</span>
                         </button>
-                      ) : (
-                        isAthlete && (
+                        {isAthlete && (
                           <button
                             type="button"
-                            onClick={() =>
-                              openSetCreate(
-                                entry.id,
-                                row.id,
-                                `${row.distance_m}m×${row.reps}×${row.sets} ${row.stroke}`
-                              )
-                            }
-                            className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-[#0077b6]/30 bg-[#0077b6]/10 px-3.5 text-xs font-semibold text-[#0b1f3a] hover:bg-[#0077b6]/15 dark:border-[#38bdf8]/40 dark:bg-[#38bdf8]/15 dark:text-sky-200 self-start sm:self-center whitespace-nowrap"
+                            onClick={() => {
+                              setModalError(null);
+                              setDeleteTarget({
+                                type: 'set',
+                                id: sr.id,
+                                revision: sr.revision,
+                                label: `${row.distance_m}m×${row.reps}×${row.sets} ${row.stroke} の記録`,
+                              });
+                            }}
+                            className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-rose-300 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-950/40 whitespace-nowrap"
                           >
-                            <Plus className="h-3.5 w-3.5" />
-                            <span>記録追加</span>
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>削除</span>
                           </button>
-                        )
-                      )}
-                    </div>
-                  );
-                })}
+                        )}
+                      </div>
+                    ) : (
+                      isAthlete && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openSetCreate(
+                              entry.id,
+                              row.id,
+                              `${row.distance_m}m×${row.reps}×${row.sets} ${row.stroke}`
+                            )
+                          }
+                          className="inline-flex min-h-[44px] items-center gap-1 rounded-xl border border-[#0077b6]/30 bg-[#0077b6]/10 px-3.5 text-xs font-semibold text-[#0b1f3a] hover:bg-[#0077b6]/15 dark:border-[#38bdf8]/40 dark:bg-[#38bdf8]/15 dark:text-sky-200 self-start sm:self-center whitespace-nowrap"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          <span>記録追加</span>
+                        </button>
+                      )
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Coach Comments */}
@@ -580,7 +799,7 @@ export const PracticeLogDetailPage: React.FC = () => {
                               : ''}
                           </span>
                           <span className="font-mono-num">
-                            {c.created_at.slice(0, 16).replace('T', ' ')}
+                            {formatIsoToJstDateTime(c.created_at)}
                           </span>
                         </div>
                         <p className="mt-1 text-[#0b1f3a] dark:text-slate-100 whitespace-pre-wrap">
@@ -679,11 +898,21 @@ export const PracticeLogDetailPage: React.FC = () => {
                     {h.changed_by ? profileNameMap.get(h.changed_by) ?? '担当者' : '担当者'}
                   </span>
                   <span className="font-mono-num text-slate-500 dark:text-slate-400">
-                    {h.changed_at.slice(0, 16).replace('T', ' ')}
+                    {formatIsoToJstDateTime(h.changed_at)}
                   </span>
                 </div>
-                <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:bg-[#07111e] dark:text-slate-300">
-                  変更前: {formatOldDataSummary(h.table_name, h.old_data)}
+                <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-700 dark:bg-[#07111e] dark:text-slate-300 space-y-1">
+                  <div>変更前: {formatOldDataSummary(h.table_name, h.old_data)}</div>
+                  <div className="font-medium text-[#0b1f3a] dark:text-slate-100">
+                    現在:{' '}
+                    {formatCurrentDataSummary(
+                      h.table_name,
+                      day,
+                      entriesById,
+                      setsById,
+                      h.record_id
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -881,6 +1110,64 @@ export const PracticeLogDetailPage: React.FC = () => {
                   : 'セット結果を追加'}
               </span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Athlete Soft-Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-log-modal-title"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-rose-300 bg-white p-6 shadow-xl dark:border-rose-800 dark:bg-[#0e1b2e] space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3
+                id="delete-log-modal-title"
+                className="text-base font-bold text-rose-800 dark:text-rose-200"
+              >
+                記録の削除確認
+              </h3>
+              <button
+                type="button"
+                aria-label="閉じる"
+                disabled={saving}
+                onClick={() => setDeleteTarget(null)}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+              「<span className="font-bold">{deleteTarget.label}</span>」を削除しますか？
+              <br />
+              この操作は取り消せません。一覧画面からは非表示になり、変更履歴には記録が残ります。
+            </p>
+            {modalError && (
+              <div className="rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200">
+                {modalError}
+              </div>
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setDeleteTarget(null)}
+                className="min-h-[44px] rounded-xl border border-slate-300 px-4 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void handleConfirmDelete()}
+                className="min-h-[44px] rounded-xl bg-rose-600 px-4 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {saving ? '削除中...' : '削除を実行する'}
+              </button>
+            </div>
           </div>
         </div>
       )}

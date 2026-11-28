@@ -12,6 +12,14 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useSwimData } from '../../hooks/useSwimData';
+import { getRecordSyncState } from '../../lib/outboxOverlay';
+import {
+  formatIsoToJstDate,
+  formatYmdWithWeekdayJst,
+  getDaysUntilJst,
+  getTodayJst,
+  shiftDateDays,
+} from '../../utils/dateJst';
 import {
   calculateMenuMetrics,
   deriveMenuStatus,
@@ -19,11 +27,13 @@ import {
   formatMenuStatusLabel,
   formatTimeMs,
 } from '../../utils/swimCalculations';
+import { SyncStatusBadge } from '../sync/SyncStatusBadge';
 
 export const HomePage: React.FC = () => {
   const { session } = useAuth();
-  const { dataset, competitions } = useSwimData();
+  const { dataset, outbox, competitions } = useSwimData();
   const isCoach = session?.role === 'coach';
+  const todayJst = getTodayJst();
 
   const latestVersionByMenu = useMemo(() => {
     const map = new Map<string, (typeof dataset.menu_versions)[number]>();
@@ -57,11 +67,18 @@ export const HomePage: React.FC = () => {
     [dataset.practice_entries]
   );
 
+  const commentedEntryIdSet = useMemo(
+    () => new Set(dataset.coach_comments.map((c) => c.entry_id)),
+    [dataset.coach_comments]
+  );
+
+  const uncommentedEntryCount = useMemo(
+    () => activeEntries.filter((e) => !commentedEntryIdSet.has(e.id)).length,
+    [activeEntries, commentedEntryIdSet]
+  );
+
   const weeklyStats = useMemo(() => {
-    const now = new Date();
-    const weekAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10);
+    const weekAgo = shiftDateDays(todayJst, -6);
 
     const recentDayIds = new Set(
       activeDays.filter((d) => d.practice_date >= weekAgo).map((d) => d.id)
@@ -77,8 +94,9 @@ export const HomePage: React.FC = () => {
         weekDistance += calculateMenuMetrics(ver.content?.rows ?? []).totalDistanceM;
       }
     }
-    return { weekDistance, weekSessions, recentDayCount: recentDayIds.size };
-  }, [activeDays, activeEntries, versionById]);
+    const todayDay = activeDays.find((d) => d.practice_date === todayJst) ?? null;
+    return { weekDistance, weekSessions, recentDayCount: recentDayIds.size, todayDay };
+  }, [activeDays, activeEntries, versionById, todayJst]);
 
   const sharedMenus = useMemo(
     () => dataset.menus.filter((m) => m.is_shared && !m.is_archived),
@@ -86,19 +104,14 @@ export const HomePage: React.FC = () => {
   );
 
   const nextCompetition = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
     const upcoming = competitions
-      .filter((c) => c.event_date >= today)
+      .filter((c) => c.event_date >= todayJst)
       .sort((a, b) => a.event_date.localeCompare(b.event_date));
     if (upcoming.length === 0) return null;
     const target = upcoming[0];
-    const diffDays = Math.ceil(
-      (new Date(`${target.event_date}T00:00:00`).getTime() -
-        new Date(`${today}T00:00:00`).getTime()) /
-        (1000 * 60 * 60 * 24)
-    );
+    const diffDays = getDaysUntilJst(target.event_date, todayJst);
     return { ...target, diffDays };
-  }, [competitions]);
+  }, [competitions, todayJst]);
 
   const recentComments = useMemo(
     () =>
@@ -117,7 +130,7 @@ export const HomePage: React.FC = () => {
 
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
           <div className="min-w-0 space-y-2">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3.5 py-1 text-xs font-bold text-[#38bdf8] backdrop-blur-md border border-white/10">
+            <div className="inline-flex items-center gap-2 rounded-lg bg-white/10 px-3 py-1 text-xs font-bold text-[#38bdf8] backdrop-blur-md border border-white/10">
               <Zap className="h-3.5 w-3.5 fill-[#38bdf8]" />
               <span>{isCoach ? 'コーチダッシュボード' : '選手ダッシュボード'} · {session?.displayName || '表示名未設定'}</span>
             </div>
@@ -127,6 +140,8 @@ export const HomePage: React.FC = () => {
             <p className="text-xs sm:text-sm text-slate-300 max-w-xl leading-relaxed">
               {isCoach
                 ? '作成したメニューの配信状態管理や、選手ごとのタイム・感想に対するコーチングフィードバックを素早く行えます。'
+                : weeklyStats.todayDay
+                ? `本日（${formatYmdWithWeekdayJst(todayJst)}）の練習記録が登録されています。引き続きタイムや感想を詳しく残しましょう。`
                 : '共有されたトレーニングメニューを確認し、日々の泳距離やラップタイム、コンディションを正確に記録しましょう。'}
             </p>
           </div>
@@ -153,10 +168,10 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* Strava-style Elite Metrics Grid */}
+      {/* Metrics Grid */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="group rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm transition hover:border-[#0077b6]/50 hover:shadow-md dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-1">
-          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center justify-between text-xs font-semibold tracking-wider text-slate-400">
             <span>直近7日の総距離</span>
             <Activity className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
           </div>
@@ -169,7 +184,7 @@ export const HomePage: React.FC = () => {
         </div>
 
         <div className="group rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm transition hover:border-[#0077b6]/50 hover:shadow-md dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-1">
-          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center justify-between text-xs font-semibold tracking-wider text-slate-400">
             <span>直近7日の練習</span>
             <Calendar className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
           </div>
@@ -177,20 +192,22 @@ export const HomePage: React.FC = () => {
             {weeklyStats.recentDayCount}日 / {weeklyStats.weekSessions}回
           </div>
           <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            安定した継続頻度
+            継続したトレーニング回数
           </p>
         </div>
 
         <div className="group rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm transition hover:border-[#0077b6]/50 hover:shadow-md dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-1">
-          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
-            <span>共有中メニュー</span>
+          <div className="flex items-center justify-between text-xs font-semibold tracking-wider text-slate-400">
+            <span>{isCoach ? '共有中 / 未コメント' : '共有中メニュー'}</span>
             <ClipboardList className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
           </div>
           <div className="font-mono-num text-2xl sm:text-3xl font-extrabold text-[#0b1f3a] dark:text-slate-50">
             {sharedMenus.length}件
           </div>
           <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            配信中の練習メニュー
+            {isCoach
+              ? `未コメントの練習記録: ${uncommentedEntryCount}件`
+              : '配信中の練習メニュー'}
           </p>
         </div>
 
@@ -198,7 +215,7 @@ export const HomePage: React.FC = () => {
           to="/settings"
           className="group rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm transition hover:border-[#0077b6] hover:shadow-md dark:border-slate-800/80 dark:bg-[#0e1b2e] space-y-1"
         >
-          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center justify-between text-xs font-semibold tracking-wider text-slate-400">
             <span>次の大会まで</span>
             <Trophy className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8]" />
           </div>
@@ -260,15 +277,24 @@ export const HomePage: React.FC = () => {
                   const statusLabel = formatMenuStatusLabel(
                     deriveMenuStatus(menu, dataset.menu_status_history)
                   );
+                  const syncStatus = getRecordSyncState(
+                    outbox,
+                    ver ? [menu.id, ver.id] : [menu.id]
+                  );
                   return (
                     <Link
                       key={menu.id}
                       to={`/menus/${menu.id}`}
                       className="flex min-h-[64px] items-center justify-between gap-3 py-3.5 transition hover:bg-slate-50/80 dark:hover:bg-slate-800/30 rounded-xl px-3 -mx-3"
                     >
-                      <div className="min-w-0 space-y-0.5">
-                        <div className="truncate text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
-                          {ver?.title ?? '名称未設定メニュー'}
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-bold text-[#0b1f3a] dark:text-slate-100">
+                            {ver?.title ?? '名称未設定メニュー'}
+                          </span>
+                          {syncStatus.state !== 'synced' && (
+                            <SyncStatusBadge state={syncStatus.state} compact />
+                          )}
                         </div>
                         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono-num">
                           <span className="font-semibold text-[#0077b6] dark:text-[#38bdf8]">
@@ -309,7 +335,9 @@ export const HomePage: React.FC = () => {
 
           {activeDays.length === 0 ? (
             <p className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-              まだ練習記録がありません。「練習を記録する」から記録を追加しましょう。
+              {isCoach
+                ? 'まだ選手の練習記録がありません。メニューを共有すると選手から記録が届きます。'
+                : 'まだ練習記録がありません。「練習を記録する」から記録を追加しましょう。'}
             </p>
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800/60">
@@ -323,6 +351,8 @@ export const HomePage: React.FC = () => {
                   );
                 }, 0);
                 const totalMs = entries.reduce((sum, e) => sum + (e.total_time_ms ?? 0), 0);
+                const hasUncommented = entries.some((e) => !commentedEntryIdSet.has(e.id));
+                const daySync = getRecordSyncState(outbox, [day.id, ...entries.map((e) => e.id)]);
 
                 return (
                   <Link
@@ -330,10 +360,24 @@ export const HomePage: React.FC = () => {
                     to={`/logs/day/${day.id}`}
                     className="flex min-h-[64px] items-center justify-between gap-3 py-3.5 transition hover:bg-slate-50/80 dark:hover:bg-slate-800/30 rounded-xl px-3 -mx-3"
                   >
-                    <div className="min-w-0 space-y-0.5">
-                      <div className="flex items-center gap-2 text-sm font-bold text-[#0b1f3a] dark:text-slate-100 font-mono-num">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-[#0b1f3a] dark:text-slate-100 font-mono-num">
                         <Calendar className="h-4 w-4 text-[#0077b6] dark:text-[#38bdf8] shrink-0" />
-                        <span>{day.practice_date}</span>
+                        <span>{formatYmdWithWeekdayJst(day.practice_date)}</span>
+                        {isCoach && entries.length > 0 && (
+                          <span
+                            className={`rounded-md px-1.5 py-0.5 text-[10px] font-sans font-semibold ${
+                              hasUncommented
+                                ? 'bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-200'
+                                : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-200'
+                            }`}
+                          >
+                            {hasUncommented ? '未コメント' : 'コメント済'}
+                          </span>
+                        )}
+                        {daySync.state !== 'synced' && (
+                          <SyncStatusBadge state={daySync.state} compact />
+                        )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-mono-num">
                         <span>{entries.length}メニュー</span>
@@ -376,7 +420,7 @@ export const HomePage: React.FC = () => {
               return (
                 <div key={c.id} className="py-3 text-sm space-y-1">
                   <div className="text-xs text-slate-500 dark:text-slate-400 font-mono-num">
-                    {ver?.title ?? '練習記録'} · {c.created_at.slice(0, 10)}
+                    {ver?.title ?? '練習記録'} · {formatIsoToJstDate(c.created_at)}
                   </div>
                   <p className="text-slate-800 dark:text-slate-200 font-medium">
                     {c.body}
